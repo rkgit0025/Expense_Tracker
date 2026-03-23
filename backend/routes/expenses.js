@@ -5,6 +5,7 @@ const fs      = require('fs');
 const PDFDocument = require('pdfkit');
 const db      = require('../config/db');
 const { sendExpenseSubmissionEmail, sendExpenseActionEmail } = require('../config/mailer');
+const { logAudit } = require('../config/audit');
 const auth    = require('../middleware/auth');
 const { authorize } = require('../middleware/auth');
 const upload  = require('../middleware/upload');
@@ -224,6 +225,10 @@ router.post('/', auth, async (req, res) => {
     await insertMisc  (conn, expenseId, misc);
 
     await conn.commit();
+
+    await logAudit(db, req, 'expense_created', 'expense', expenseId,
+      `Expense #${expenseId}`, `Created expense draft #${expenseId} (project_id: ${project_id})`);
+
     res.status(201).json({ message: 'Draft created.', expense_id: expenseId });
   } catch (err) {
     await conn.rollback();
@@ -267,6 +272,7 @@ router.put('/:id', auth, async (req, res) => {
     await insertMisc  (conn, expenseId, misc);
 
     await conn.commit();
+    await logAudit(db, req, 'expense_updated', 'expense', expenseId, `Expense #${expenseId}`, `Expense #${expenseId} draft updated`);
     res.json({ message: 'Expense updated.' });
   } catch (err) {
     await conn.rollback();
@@ -301,6 +307,10 @@ router.post('/:id/submit', auth, async (req, res) => {
       );
       await logHistory(db, expenseId, req.user.emp_id, 'submitted', form.status, 'coordinator_approved',
         'Submitted by coordinator/senior role — sent directly to HR.');
+
+      await logAudit(db, req, 'expense_submitted', 'expense', expenseId,
+        `Expense #${expenseId}`, `Expense #${expenseId} submitted (senior role — coordinator stage skipped, sent to HR)`);
+
       return res.json({ message: 'Expense submitted. Sent directly to HR for approval.' });
     }
 
@@ -346,6 +356,7 @@ router.post('/:id/submit', auth, async (req, res) => {
     }
     // ─────────────────────────────────────────────────────────────────────────
 
+    await logAudit(db, req, 'expense_submitted', 'expense', expenseId, `Expense #${expenseId}`, `Expense #${expenseId} submitted for coordinator approval`);
     res.json({ message: 'Expense submitted for coordinator approval.' });
   } catch (err) {
     console.error(err);
@@ -424,6 +435,7 @@ router.post('/:id/approve', auth, async (req, res) => {
       console.warn('Approval notification email failed (non-fatal):', mailErr.message);
     }
 
+    await logAudit(db, req, 'expense_approved', 'expense', expenseId, `Expense #${expenseId}`, `Expense #${expenseId} approved by ${req.user.role} — new status: ${newStatus}`);
     res.json({ message: 'Expense approved.', new_status: newStatus });
   } catch (err) {
     if (err.status) return res.status(err.status).json({ message: err.message });
@@ -503,6 +515,7 @@ router.post('/:id/reject', auth, async (req, res) => {
       console.warn('Rejection notification email failed (non-fatal):', mailErr.message);
     }
 
+    await logAudit(db, req, 'expense_rejected', 'expense', expenseId, `Expense #${expenseId}`, `Expense #${expenseId} rejected by ${req.user.role} — new status: ${newStatus}`);
     res.json({ message: 'Expense rejected. The submitter will be notified to resubmit with corrections.', new_status: newStatus });
   } catch (err) {
     if (err.status) return res.status(err.status).json({ message: err.message });

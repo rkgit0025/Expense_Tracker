@@ -15,6 +15,7 @@ import AdminCoordinators from './pages/Admin/AdminCoordinators';
 import AdminProjects     from './pages/Admin/AdminProjects';
 import AdminRates        from './pages/Admin/AdminRates';
 import AdminMasterData   from './pages/Admin/AdminMasterData';
+import AdminAuditLogs    from './pages/Admin/AdminAuditLogs';
 import ProfilePage       from './pages/ProfilePage';
 
 function PrivateRoute({ children, roles }) {
@@ -54,6 +55,8 @@ function AppRoutes() {
           element={<PrivateRoute roles={['admin','hr']}><AdminRates /></PrivateRoute>} />
         <Route path="admin/master-data"
           element={<PrivateRoute roles={['admin','hr']}><AdminMasterData /></PrivateRoute>} />
+        <Route path="admin/audit-logs"
+          element={<PrivateRoute roles={['admin']}><AdminAuditLogs /></PrivateRoute>} />
         <Route path="profile" element={<ProfilePage />} />
       </Route>
 
@@ -66,7 +69,7 @@ export default function App() {
   return (
     <AuthProvider>
       <UIProvider>
-        <BrowserRouter>
+        <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
           <AppRoutes />
         </BrowserRouter>
       </UIProvider>

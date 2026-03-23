@@ -3,6 +3,9 @@ import axios from 'axios';
 const api = axios.create({
   baseURL: '/api',
   timeout: 30000,
+  // NOTE: Do NOT set Accept-Encoding manually — browsers manage this automatically
+  // and will block it as an "unsafe header" if you try to set it via JS.
+  // The compression middleware on the backend handles gzip automatically.
 });
 
 // Attach JWT on every request

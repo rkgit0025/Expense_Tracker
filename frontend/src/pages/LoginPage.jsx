@@ -33,6 +33,17 @@ export default function LoginPage() {
   const [error,        setError]        = useState('');
   const [loading,      setLoading]      = useState(false);
 
+  // Preload the logo only when the login page is actually displayed
+  // (avoids the "preloaded but not used" warning on other pages)
+  React.useEffect(() => {
+    const link = document.createElement('link');
+    link.rel  = 'preload';
+    link.as   = 'image';
+    link.href = '/logo.png';
+    document.head.appendChild(link);
+    return () => { document.head.removeChild(link); };
+  }, []);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');

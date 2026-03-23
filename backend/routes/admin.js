@@ -6,6 +6,7 @@ const xlsx    = require('xlsx');
 const db      = require('../config/db');
 const auth    = require('../middleware/auth');
 const { authorize } = require('../middleware/auth');
+const { logAudit }  = require('../config/audit');
 
 const adminOnly = authorize('admin');
 const adminOrHR = authorize('admin', 'hr');
@@ -71,6 +72,9 @@ router.post('/employees', auth, adminOrHR, async (req, res) => {
        designation_id || null, department_id || null, location_id || null,
        first_reporting_manager_emp_code || null, second_reporting_manager_emp_code || null]
     );
+
+    await logAudit(db, req, 'employee_created', 'employee', result.insertId,
+      full_name, `Created employee ${full_name} (${emp_code})`);
 
     res.status(201).json({ message: 'Employee created successfully.', emp_id: result.insertId });
   } catch (err) {
@@ -179,6 +183,8 @@ router.put('/employees/:id', auth, adminOrHR, async (req, res) => {
        first_reporting_manager_emp_code || null, second_reporting_manager_emp_code || null,
        req.params.id]
     );
+    await logAudit(db, req, 'employee_updated', 'employee', req.params.id,
+      full_name, `Updated employee ${full_name} (${emp_code})`);
     res.json({ message: 'Employee updated.' });
   } catch (err) {
     console.error(err);
@@ -188,9 +194,28 @@ router.put('/employees/:id', auth, adminOrHR, async (req, res) => {
 
 router.delete('/employees/:id', auth, adminOrHR, async (req, res) => {
   try {
-    await db.query('DELETE FROM employees WHERE emp_id=?', [req.params.id]);
+    const targetEmpId = parseInt(req.params.id);
+
+    // ── Self-delete protection ─────────────────────────────────────────────
+    // req.user.emp_id is the logged-in user's employee ID
+    if (targetEmpId === req.user.emp_id) {
+      return res.status(403).json({
+        message: 'You cannot delete your own employee record. Ask another administrator to do this.'
+      });
+    }
+
+    // Fetch the employee for audit log before deleting
+    const [[emp]] = await db.query('SELECT emp_code, full_name FROM employees WHERE emp_id=?', [targetEmpId]);
+    if (!emp) return res.status(404).json({ message: 'Employee not found.' });
+
+    await db.query('DELETE FROM employees WHERE emp_id=?', [targetEmpId]);
+
+    await logAudit(db, req, 'employee_deleted', 'employee', targetEmpId,
+      emp.full_name, `Deleted employee ${emp.full_name} (${emp.emp_code})`);
+
     res.json({ message: 'Employee deleted.' });
   } catch (err) {
+    console.error(err);
     res.status(500).json({ message: 'Server error.' });
   }
 });
@@ -275,9 +300,12 @@ router.post('/users', auth, adminOnly, async (req, res) => {
       }
     }
 
+    await logAudit(db, req, 'user_created', 'user', null, emp.full_name,
+      `Created login account for ${emp.full_name} (${emp.emp_code}) with role: ${role}`);
+
     res.status(201).json({
       message:      `User account created for ${emp.full_name}.`,
-      tempPassword,            // Always return in response so admin can share manually
+      tempPassword,
       email_sent:   emailSent,
       email_error:  emailError,
     });
@@ -335,9 +363,12 @@ router.post('/users/:id/reset-password', auth, adminOnly, async (req, res) => {
       console.warn('Password reset email failed (non-fatal):', mailErr.message);
     }
 
+    await logAudit(db, req, 'password_reset', 'user', req.params.id, userRow.full_name,
+      `Password reset for ${userRow.full_name} (${userRow.username}) — email ${emailSent ? 'sent to ' + userRow.email : 'failed: ' + emailError}`);
+
     res.json({
       message:     `Password reset for ${userRow.full_name}.`,
-      tempPassword, // show in UI so admin can share manually if email fails
+      tempPassword,
       email_sent:  emailSent,
       email_error: emailError,
     });
@@ -392,6 +423,8 @@ router.post('/coordinator-departments', auth, adminOrHR, async (req, res) => {
       return res.status(400).json({ message: 'Selected employee must have the coordinator role.' });
     await db.query(`INSERT INTO coordinator_departments (coordinator_emp_id, department_id) VALUES (?,?)`,
       [coordinator_emp_id, department_id]);
+    await logAudit(db, req, 'coordinator_assigned', 'coordinator', null, null,
+      `Coordinator (emp_id:${coordinator_emp_id}) assigned to department_id:${department_id}`);
     res.status(201).json({ message: 'Coordinator assigned.' });
   } catch (err) {
     if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'Already assigned.' });
@@ -403,6 +436,8 @@ router.post('/coordinator-departments', auth, adminOrHR, async (req, res) => {
 router.delete('/coordinator-departments/:id', auth, adminOrHR, async (req, res) => {
   try {
     await db.query('DELETE FROM coordinator_departments WHERE id=?', [req.params.id]);
+    await logAudit(db, req, 'coordinator_removed', 'coordinator', req.params.id, null,
+      `Coordinator-department assignment #${req.params.id} removed`);
     res.json({ message: 'Removed.' });
   } catch (err) { res.status(500).json({ message: 'Server error.' }); }
 });
@@ -435,6 +470,8 @@ router.delete('/departments/:id', auth, adminOrHR, async (req, res) => {
         message: `Cannot delete: ${cnt} employee${cnt>1?'s are':' is'} assigned to this department. Reassign them first.`
       });
     await db.query('DELETE FROM departments WHERE department_id=?', [req.params.id]);
+    await logAudit(db, req, 'department_deleted', 'department', req.params.id, null,
+      `Department #${req.params.id} deleted`);
     res.json({ message: 'Department deleted.' });
   } catch (err) {
     if (err.code === 'ER_ROW_IS_REFERENCED_2')
@@ -466,6 +503,8 @@ router.delete('/designations/:id', auth, adminOrHR, async (req, res) => {
         message: `Cannot delete: ${cnt} employee${cnt>1?'s are':' is'} assigned to this designation.`
       });
     await db.query('DELETE FROM designations WHERE designation_id=?', [req.params.id]);
+    await logAudit(db, req, 'designation_deleted', 'designation', req.params.id, null,
+      `Designation #${req.params.id} deleted`);
     res.json({ message: 'Designation deleted.' });
   } catch (err) {
     if (err.code === 'ER_ROW_IS_REFERENCED_2')
@@ -497,6 +536,8 @@ router.delete('/locations/:id', auth, adminOrHR, async (req, res) => {
         message: `Cannot delete: ${cnt} employee${cnt>1?'s are':' is'} assigned to this location.`
       });
     await db.query('DELETE FROM locations WHERE location_id=?', [req.params.id]);
+    await logAudit(db, req, 'location_deleted', 'location', req.params.id, null,
+      `Location #${req.params.id} deleted`);
     res.json({ message: 'Location deleted.' });
   } catch (err) {
     if (err.code === 'ER_ROW_IS_REFERENCED_2')
@@ -517,8 +558,126 @@ router.get('/stats', auth, adminOrHR, async (req, res) => {
     const [[{ total_claim }]]    = await db.query("SELECT COALESCE(SUM(claim_amount),0) as total_claim FROM expense_form WHERE status='accounts_approved'");
     const [[{ total_employees }]]= await db.query('SELECT COUNT(*) as total_employees FROM employees');
     const [[{ total_users }]]    = await db.query("SELECT COUNT(*) as total_users FROM users WHERE status='active'");
-    res.json({ total_expenses, pending, approved, total_claim, total_employees, total_users });
-  } catch (err) { res.status(500).json({ message: 'Server error.' }); }
+
+    // Analytics for admin dashboard
+    const [byStatus]      = await db.query(`
+      SELECT status, COUNT(*) as count, COALESCE(SUM(claim_amount),0) as total
+      FROM expense_form GROUP BY status ORDER BY count DESC`);
+
+    const [byDepartment]  = await db.query(`
+      SELECT dep.department_name, COUNT(ef.expense_id) as count,
+             COALESCE(SUM(ef.claim_amount),0) as total
+      FROM expense_form ef
+      JOIN employees e   ON ef.emp_id        = e.emp_id
+      JOIN departments dep ON e.department_id  = dep.department_id
+      GROUP BY dep.department_id, dep.department_name
+      ORDER BY total DESC LIMIT 10`);
+
+    const [monthlyTrend]  = await db.query(`
+      SELECT DATE_FORMAT(submitted_at,'%Y-%m') as month,
+             COUNT(*) as count,
+             COALESCE(SUM(claim_amount),0) as total
+      FROM expense_form
+      WHERE submitted_at >= DATE_SUB(NOW(), INTERVAL 12 MONTH)
+        AND submitted_at IS NOT NULL
+      GROUP BY month ORDER BY month ASC`);
+
+    const [topClaimants]  = await db.query(`
+      SELECT e.full_name, e.emp_code, dep.department_name,
+             COUNT(ef.expense_id) as submissions,
+             COALESCE(SUM(ef.claim_amount),0) as total_claimed
+      FROM expense_form ef
+      JOIN employees   e   ON ef.emp_id       = e.emp_id
+      LEFT JOIN departments dep ON e.department_id = dep.department_id
+      GROUP BY e.emp_id, e.full_name, e.emp_code, dep.department_name
+      ORDER BY total_claimed DESC LIMIT 5`);
+
+    const [recentActivity]= await db.query(`
+      SELECT al.action_time, al.actor_name, al.actor_role, al.action,
+             al.entity_type, al.entity_label, al.description
+      FROM audit_logs al
+      ORDER BY al.action_time DESC LIMIT 20`);
+
+    res.json({
+      total_expenses, pending, approved, total_claim, total_employees, total_users,
+      byStatus, byDepartment, monthlyTrend, topClaimants, recentActivity,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error.' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// AUDIT LOGS — admin read only
+// NOTE: /audit-logs/export must come BEFORE /audit-logs to avoid param conflict
+router.get('/audit-logs/export', auth, adminOnly, async (req, res) => {
+  try {
+    const { action, entity_type, search } = req.query;
+    let where  = 'WHERE 1=1';
+    const params = [];
+    if (action)       { where += ' AND action = ?';       params.push(action); }
+    if (entity_type)  { where += ' AND entity_type = ?';  params.push(entity_type); }
+    if (search) {
+      where += ' AND (actor_name LIKE ? OR entity_label LIKE ? OR description LIKE ?)';
+      const q = `%${search}%`;
+      params.push(q, q, q);
+    }
+    const [rows] = await db.query(
+      `SELECT * FROM audit_logs ${where} ORDER BY action_time DESC LIMIT 10000`, params
+    );
+    const esc     = (v) => `"${String(v || '').replace(/"/g, '""')}"`;
+    const fmtDate = (d) => d ? new Date(d).toLocaleString('en-IN') : '';
+    const headers = ['ID','Date & Time','Actor Name','Actor Role','Action','Entity Type','Entity ID','Entity Label','Description','IP Address'];
+    const csv = [
+      headers.map(esc).join(','),
+      ...rows.map(r => [
+        r.id, fmtDate(r.action_time), r.actor_name, r.actor_role,
+        r.action, r.entity_type, r.entity_id, r.entity_label, r.description, r.ip_address,
+      ].map(esc).join(','))
+    ].join('\r\n');
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="audit_log_${Date.now()}.csv"`);
+    res.send(csv);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Export failed.' });
+  }
+});
+
+router.get('/audit-logs', auth, adminOnly, async (req, res) => {
+  try {
+    const { page = 1, limit = 50, action, entity_type, actor_emp_id, search } = req.query;
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    let where  = 'WHERE 1=1';
+    const params = [];
+
+    if (action)       { where += ' AND al.action = ?';           params.push(action); }
+    if (entity_type)  { where += ' AND al.entity_type = ?';      params.push(entity_type); }
+    if (actor_emp_id) { where += ' AND al.actor_emp_id = ?';     params.push(actor_emp_id); }
+    if (search) {
+      where += ' AND (al.actor_name LIKE ? OR al.entity_label LIKE ? OR al.description LIKE ?)';
+      const q = `%${search}%`;
+      params.push(q, q, q);
+    }
+
+    const [rows] = await db.query(
+      `SELECT al.* FROM audit_logs al ${where}
+       ORDER BY al.action_time DESC
+       LIMIT ? OFFSET ?`,
+      [...params, parseInt(limit), offset]
+    );
+
+    const [[{ total }]] = await db.query(
+      `SELECT COUNT(*) as total FROM audit_logs al ${where}`, params
+    );
+
+    res.json({ logs: rows, total, page: parseInt(page), limit: parseInt(limit) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error.' });
+  }
 });
 
 module.exports = router;

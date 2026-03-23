@@ -4,6 +4,7 @@ const bcrypt   = require('bcryptjs');
 const jwt      = require('jsonwebtoken');
 const db       = require('../config/db');
 const auth     = require('../middleware/auth');
+const { logAudit } = require('../config/audit');
 
 // ── POST /api/auth/login ──────────────────────────────────────────────────────
 router.post('/login', async (req, res) => {
@@ -35,8 +36,12 @@ router.post('/login', async (req, res) => {
       return res.status(403).json({ message: 'Your account has been deactivated. Please contact HR.' });
 
     const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch)
+    if (!isMatch) {
+      await logAudit(db, { headers: req.headers, socket: req.socket, user: { emp_id: user.emp_id, role: user.role } },
+        'login_failed', 'user', user.user_id, user.full_name,
+        `Failed login attempt for username: ${username}`).catch(()=>{});
       return res.status(401).json({ message: 'Invalid username or password.' });
+    }
 
     const payload = {
       user_id:        user.user_id,
@@ -47,6 +52,11 @@ router.post('/login', async (req, res) => {
     };
 
     const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '8h' });
+
+    // Audit: login success
+    await logAudit(db, { headers: req.headers, socket: req.socket, user: { emp_id: user.emp_id, role: user.role } },
+      'login', 'user', user.user_id, user.full_name,
+      `${user.full_name} (${user.role}) logged in`).catch(()=>{});
 
     res.json({
       token,
@@ -127,6 +137,10 @@ router.post('/change-password', auth, async (req, res) => {
 
     const hash = await bcrypt.hash(new_password, 10);
     await db.query('UPDATE users SET password=?, must_change_password=0 WHERE user_id=?', [hash, req.user.user_id]);
+
+    await logAudit(db, req, 'password_changed', 'user', req.user.user_id, null,
+      'User changed their own password via profile settings');
+
     res.json({ message: 'Password changed successfully.' });
   } catch (err) {
     console.error(err);

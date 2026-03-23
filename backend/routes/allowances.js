@@ -3,6 +3,7 @@ const router  = express.Router();
 const db      = require('../config/db');
 const auth    = require('../middleware/auth');
 const { authorize } = require('../middleware/auth');
+const { logAudit }  = require('../config/audit');
 
 // GET rates for current user's designation
 router.get('/my-rates', auth, async (req, res) => {
@@ -48,6 +49,8 @@ router.post('/', auth, authorize('admin', 'hr'), async (req, res) => {
        ON DUPLICATE KEY UPDATE amount = VALUES(amount)`,
       [designation_id, scope, amount]
     );
+    await logAudit(db, req, 'allowance_rate_saved', 'allowance', null,
+      `Scope: ${scope}`, `Allowance rate saved — designation_id:${designation_id}, scope:${scope}, amount:${amount}`);
     res.json({ message: 'Rate saved.' });
   } catch (err) {
     res.status(500).json({ message: 'Server error.' });

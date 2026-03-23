@@ -5,6 +5,7 @@ const xlsx    = require('xlsx');
 const db      = require('../config/db');
 const auth    = require('../middleware/auth');
 const { authorize } = require('../middleware/auth');
+const { logAudit }  = require('../config/audit');
 
 const adminOrHR = authorize('admin', 'hr');
 
@@ -120,6 +121,8 @@ router.post('/', auth, adminOrHR, async (req, res) => {
        VALUES (?, ?, ?, ?, ?)`,
       [project_code, project_name, site_location || '', project_coordinator_hod || '', site_incharge_emp_code || null]
     );
+    await logAudit(db, req, 'project_created', 'project', result.insertId,
+      project_name, `Created project ${project_name} (${project_code})`);
     res.status(201).json({ message: 'Project created.', project_id: result.insertId });
   } catch (err) {
     if (err.code === 'ER_DUP_ENTRY')
@@ -139,6 +142,8 @@ router.put('/:id', auth, adminOrHR, async (req, res) => {
       [project_code, project_name, site_location || '', project_coordinator_hod || '',
        site_incharge_emp_code || null, req.params.id]
     );
+    await logAudit(db, req, 'project_updated', 'project', req.params.id,
+      project_name, `Updated project ${project_name} (${project_code})`);
     res.json({ message: 'Project updated.' });
   } catch (err) {
     res.status(500).json({ message: 'Server error.' });
@@ -155,7 +160,10 @@ router.delete('/:id', auth, adminOrHR, async (req, res) => {
       return res.status(409).json({
         message: `Cannot delete: ${cnt} expense claim${cnt > 1 ? 's are' : ' is'} linked to this project. Remove those expenses first.`
       });
+    const [[proj]] = await db.query('SELECT project_code, project_name FROM projects WHERE project_id=?', [req.params.id]);
     await db.query('DELETE FROM projects WHERE project_id = ?', [req.params.id]);
+    await logAudit(db, req, 'project_deleted', 'project', req.params.id,
+      proj?.project_name, `Deleted project ${proj?.project_name} (${proj?.project_code})`);
     res.json({ message: 'Project deleted.' });
   } catch (err) {
     if (err.code === 'ER_ROW_IS_REFERENCED_2')

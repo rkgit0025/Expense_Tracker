@@ -15,6 +15,7 @@ const NAV = [
   { to: '/admin/projects',     icon: '🏗️', label: 'Projects',           roles: ['admin','hr'] },
   { to: '/admin/rates',        icon: '💰', label: 'Allowance Rates',    roles: ['admin','hr'] },
   { to: '/admin/master-data',  icon: '🗂️', label: 'Master Data',        roles: ['admin','hr'] },
+  { to: '/admin/audit-logs',  icon: '📜', label: 'Audit Logs',          roles: ['admin'] },
 ];
 
 const ROLE_COLORS = {
