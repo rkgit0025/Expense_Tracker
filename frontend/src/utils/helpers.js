@@ -4,12 +4,33 @@ export const formatINR = (amount) => {
   return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 }).format(n);
 };
 
+// Parse a datetime string that was stored as IST (no timezone suffix) correctly
+const parseIST = (dateStr) => {
+  if (!dateStr) return null;
+  // If the string has no timezone info (no Z, no +, no -offset after time), treat as IST
+  const s = String(dateStr);
+  const hasOffset = s.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(s);
+  return new Date(hasOffset ? s : s + '+05:30');
+};
+
 // Format date for display  dd-MMM-yyyy
 export const formatDate = (dateStr) => {
   if (!dateStr) return '—';
-  const d = new Date(dateStr);
-  if (isNaN(d)) return dateStr;
-  return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  const d = parseIST(dateStr);
+  if (!d || isNaN(d)) return dateStr;
+  return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' });
+};
+
+// Format datetime for display  dd-MMM-yyyy hh:mm AM/PM IST
+export const formatDateTime = (dateStr) => {
+  if (!dateStr) return '—';
+  const d = parseIST(dateStr);
+  if (!d || isNaN(d)) return dateStr;
+  return d.toLocaleString('en-IN', {
+    day: '2-digit', month: 'short', year: 'numeric',
+    hour: '2-digit', minute: '2-digit', hour12: true,
+    timeZone: 'Asia/Kolkata',
+  }) + ' IST';
 };
 
 // Format date for <input type="date">  yyyy-MM-dd

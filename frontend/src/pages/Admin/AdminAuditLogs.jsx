@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import api from '../../api/axios';
-import { formatDate } from '../../utils/helpers';
+import { formatDate, formatDateTime } from '../../utils/helpers';
 
 const ACTION_OPTIONS = [
   { value: '', label: 'All Actions' },
@@ -229,10 +229,7 @@ export default function AdminAuditLogs() {
                   return (
                     <tr key={log.id}>
                       <td style={{ fontSize:11, color:'var(--gray-400)', whiteSpace:'nowrap' }}>
-                        {new Date(log.action_time).toLocaleString('en-IN', {
-                          day:'2-digit', month:'short', year:'numeric',
-                          hour:'2-digit', minute:'2-digit', hour12:true,
-                        })}
+                        {formatDateTime(log.action_time)}
                       </td>
                       <td>
                         <div style={{ fontWeight:600, fontSize:13 }}>{log.actor_name || '—'}</div>
@@ -272,7 +269,7 @@ export default function AdminAuditLogs() {
                         </div>
                         {log.ip_address && (
                           <div style={{ fontSize:10, color:'var(--gray-300)', marginTop:2, fontFamily:'var(--mono)' }}>
-                            IP: {log.ip_address}
+                           
                           </div>
                         )}
                       </td>

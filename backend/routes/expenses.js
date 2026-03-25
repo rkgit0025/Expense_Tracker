@@ -44,14 +44,14 @@ async function buildListQuery(role, empId) {
 
     case 'hr':
       return {
-        where:  `(ef.emp_id = ? OR ef.status IN ('coordinator_approved','hr_approved','hr_rejected','accounts_approved','accounts_rejected'))`,
-        params: [empId]
+        where:  `(ef.emp_id = ? OR (ef.emp_id != ? AND ef.status IN ('coordinator_approved','hr_approved','hr_rejected','accounts_approved','accounts_rejected')))`,
+        params: [empId, empId]
       };
 
     case 'accounts':
       return {
-        where:  `(ef.emp_id = ? OR ef.status IN ('hr_approved','accounts_approved','accounts_rejected'))`,
-        params: [empId]
+        where:  `(ef.emp_id = ? OR (ef.emp_id != ? AND ef.status IN ('hr_approved','accounts_approved','accounts_rejected')))`,
+        params: [empId, empId]
       };
 
     default: // admin
@@ -828,10 +828,7 @@ router.get('/:id/pdf', auth, async (req, res) => {
     }
 
     // ── Footer ──
-    doc.rect(40, doc.page.height - 50, W, 1).fill(LightGray);
-    doc.fillColor(GRAY).fontSize(8).font('Helvetica')
-      .text(`ExpenseTrack — Expense #${expenseId} — Confidential`, 40, doc.page.height - 40, { align: 'center', width: W });
-
+   
     doc.end();
   } catch (err) {
     console.error(err);

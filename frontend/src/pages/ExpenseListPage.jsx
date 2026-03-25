@@ -42,7 +42,8 @@ export default function ExpenseListPage() {
     try {
       const { data } = await api.get('/expenses');
       setMyExp(data.filter(e => e.emp_id === user.emp_id));
-      setAllExp(data.filter(e => e.emp_id !== user.emp_id));
+      // Drafts from other people must NEVER appear in the "All" tab for any role
+      setAllExp(data.filter(e => e.emp_id !== user.emp_id && e.status !== 'draft'));
     } catch (err) {
       setLoadError(err.response?.data?.message || 'Failed to load expenses.');
     } finally { setLoading(false); }

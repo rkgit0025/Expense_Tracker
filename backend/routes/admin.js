@@ -1,6 +1,7 @@
 const express = require('express');
 const router  = express.Router();
 const bcrypt  = require('bcryptjs');
+const crypto  = require('crypto');
 const multer  = require('multer');
 const xlsx    = require('xlsx');
 const db      = require('../config/db');
@@ -269,7 +270,6 @@ router.post('/users', auth, adminOnly, async (req, res) => {
     if (existing) return res.status(409).json({ message: 'This employee already has a user account.' });
 
     // Generate a secure temporary password
-    const crypto = require('crypto');
     const tempPassword = 'Temp@' + crypto.randomBytes(4).toString('hex').toUpperCase();
     const hash         = await bcrypt.hash(tempPassword, 10);
     const username     = emp.email.toLowerCase().trim();
@@ -337,7 +337,6 @@ router.post('/users/:id/reset-password', auth, adminOnly, async (req, res) => {
     if (!userRow) return res.status(404).json({ message: 'User not found.' });
 
     // Auto-generate a secure temp password
-    const crypto      = require('crypto');
     const tempPassword = 'Temp@' + crypto.randomBytes(4).toString('hex').toUpperCase();
     const hash         = await bcrypt.hash(tempPassword, 10);
 

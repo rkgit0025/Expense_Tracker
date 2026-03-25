@@ -108,6 +108,32 @@ export default function ExpenseFormPage() {
 
   const handleSubmit = async () => {
     if (!expenseId) { setFormError('Please save the expense first.'); return; }
+
+    // ── Receipt validation ──────────────────────────────────────────────────
+    // If a section has data, at least one receipt must be uploaded for it.
+    const receiptsByCategory = (cat) => receipts.filter(r => r.category === cat);
+
+    const hasTravelData = travel.some(r => r.from_location || r.from_date);
+    const hasHotelData  = hotel.some(r => r.location || r.from_date);
+    const hasFoodData   = food.some(r => r.location || r.from_date);
+    const hasMiscData   = misc.some(r => r.reason || r.expense_date);
+
+    const missingReceipts = [];
+    if (hasTravelData  && receiptsByCategory('Travel').length       === 0) missingReceipts.push('Travel');
+    if (hasHotelData   && receiptsByCategory('Hotel').length        === 0) missingReceipts.push('Hotel');
+    if (hasFoodData    && receiptsByCategory('Food').length         === 0) missingReceipts.push('Food');
+    if (hasMiscData    && receiptsByCategory('Miscellaneous').length === 0) missingReceipts.push('Miscellaneous');
+
+    if (missingReceipts.length > 0) {
+      setFormError(
+        `Please upload receipts for: ${missingReceipts.join(', ')}. ` +
+        'Go to Section 7 (Receipts) to attach the required files before submitting.'
+      );
+      setStep(6); // jump to receipts section
+      return;
+    }
+    // ───────────────────────────────────────────────────────────────────────
+
     const ok = await confirmDialog({
       title:        'Submit Expense for Approval',
       message:      'Are you sure you want to submit this expense?',

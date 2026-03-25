@@ -77,7 +77,9 @@ export default function AdminEmployees() {
   };
 
   const handleSave = async () => {
-    if (!form.emp_code || !form.first_name || !form.email || !form.mobile_number || !form.gender || !form.birth_of_date) {
+    // Required field validation only applies when creating a new employee.
+    // Admin updating an existing employee can save with partial data.
+    if (!editing && (!form.emp_code || !form.first_name || !form.email || !form.mobile_number || !form.gender || !form.birth_of_date)) {
       setFormError('Employee code, first name, email, mobile, gender and birth date are required.'); return;
     }
     setFormError(''); setSaving(true);

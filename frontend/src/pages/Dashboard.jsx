@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../api/axios';
 import { useAuth } from '../context/AuthContext';
-import { formatINR, formatDate, statusLabel } from '../utils/helpers';
+import { formatINR, formatDate, formatDateTime, statusLabel } from '../utils/helpers';
 
 function StatusBadge({ status }) {
   return <span className={`badge badge-${status}`}>{statusLabel(status)}</span>;
@@ -87,7 +87,7 @@ const ACTION_ICON = {
 export default function Dashboard() {
   const { user }              = useAuth();
   const isAdmin               = user?.role === 'admin';
-  const isAdminOrHR           = ['admin','hr'].includes(user?.role);
+  const isAdminOrHR           = user?.role === 'admin'; // Analytics restricted to admin only
 
   const [stats,   setStats]   = useState(null);
   const [recent,  setRecent]  = useState([]);
@@ -307,7 +307,7 @@ export default function Dashboard() {
                         {a.description || a.action.replace(/_/g,' ')}
                       </div>
                       <div style={{ fontSize:11, color:'var(--gray-400)', marginTop:2 }}>
-                        {formatDate(a.action_time)}
+                        {formatDateTime(a.action_time)}
                       </div>
                     </div>
                   </div>

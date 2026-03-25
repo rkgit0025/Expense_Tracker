@@ -24,8 +24,8 @@ async function logAudit(db, req, action, entityType, entityId, entityLabel, desc
 
     await db.query(
       `INSERT INTO audit_logs
-         (actor_emp_id, actor_name, actor_role, action, entity_type, entity_id, entity_label, description, ip_address)
-       VALUES (?,?,?,?,?,?,?,?,?)`,
+         (actor_emp_id, actor_name, actor_role, action, entity_type, entity_id, entity_label, description, ip_address, action_time)
+       VALUES (?,?,?,?,?,?,?,?,?, CONVERT_TZ(NOW(),'+00:00','+05:30'))`,
       [
         actor?.emp_id  || null,
         actorName,
