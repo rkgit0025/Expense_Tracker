@@ -22,10 +22,18 @@ function AllowanceSubSection({ title, letter, rows, onChange, readOnly, rateMap 
           field === 'to_date'   ? value : r.to_date
         );
       }
-      // Auto-calculate rate from backend
+      // Auto-calculate rate from backend (skip if Site-Allowance and manually editing amount)
       if (field === 'scope' || field === 'from_date' || field === 'to_date') {
         const scope = field === 'scope' ? value : updated.scope;
-        updated.amount_per_day = rateMap[scope] || 0;
+        if (scope !== 'Site-Allowance') {
+          updated.amount_per_day = rateMap[scope] || 0;
+        } else if (field === 'scope') {
+          // When switching TO Site-Allowance, pre-fill with the rate but allow override
+          updated.amount_per_day = rateMap['Site-Allowance'] || 0;
+        }
+      }
+      if (field === 'amount_per_day') {
+        updated.amount_per_day = parseFloat(value) || 0;
       }
       updated.total_amount = (updated.no_of_days || 0) * (updated.amount_per_day || 0);
       return updated;
@@ -93,8 +101,22 @@ function AllowanceSubSection({ title, letter, rows, onChange, readOnly, rateMap 
               <input className="form-control readonly-styled" readOnly value={row.no_of_days} />
             </div>
             <div className="form-group" style={{ margin: 0 }}>
-              <label className="form-label">Rate / Day (₹)</label>
-              <input className="form-control readonly-styled" readOnly value={row.amount_per_day || 0} />
+              <label className="form-label">
+                Rate / Day (₹)
+                {row.scope === 'Site-Allowance' && !readOnly && (
+                  <span style={{ fontSize: '10px', color: 'var(--amber)', marginLeft: '6px', fontWeight: 600 }}>✎ Editable</span>
+                )}
+              </label>
+              {row.scope === 'Site-Allowance' && !readOnly ? (
+                <input
+                  type="number" className="form-control" min="0" step="0.01"
+                  value={row.amount_per_day || 0}
+                  onChange={e => update(idx, 'amount_per_day', e.target.value)}
+                  style={{ borderColor: 'var(--amber)', background: '#fffbf0' }}
+                />
+              ) : (
+                <input className="form-control readonly-styled" readOnly value={row.amount_per_day || 0} />
+              )}
             </div>
             <div className="form-group" style={{ margin: 0 }}>
               <label className="form-label">Total Amount (₹)</label>
@@ -132,11 +154,14 @@ export default function Section2_DailyAllowance({ journey, returns, stay, onJour
   // Totals per scope
   const scopeTotals = {};
   SCOPES.forEach(s => {
-    scopeTotals[s] = {
-      days:   allRows.filter(r => r.scope === s).reduce((a, r) => a + (parseInt(r.no_of_days) || 0), 0),
-      amount: allRows.filter(r => r.scope === s).reduce((a, r) => a + (parseFloat(r.total_amount) || 0), 0),
-      rate:   rateMap[s] || 0,
-    };
+    const scopeRows = allRows.filter(r => r.scope === s);
+    const days      = scopeRows.reduce((a, r) => a + (parseInt(r.no_of_days) || 0), 0);
+    const amount    = scopeRows.reduce((a, r) => a + (parseFloat(r.total_amount) || 0), 0);
+    // For Site-Allowance: derive effective rate from actual row data (supports manual override)
+    const effectiveRate = s === 'Site-Allowance'
+      ? (days > 0 ? amount / days : (scopeRows[0]?.amount_per_day || rateMap[s] || 0))
+      : rateMap[s] || 0;
+    scopeTotals[s] = { days, amount, rate: effectiveRate };
   });
 
   return (

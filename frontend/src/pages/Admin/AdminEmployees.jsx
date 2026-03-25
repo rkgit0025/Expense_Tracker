@@ -77,8 +77,8 @@ export default function AdminEmployees() {
   };
 
   const handleSave = async () => {
-    if (!form.emp_code || !form.first_name || !form.last_name || !form.email || !form.mobile_number || !form.gender || !form.birth_of_date) {
-      setFormError('Employee code, full name, email, mobile, gender and birth date are required.'); return;
+    if (!form.emp_code || !form.first_name || !form.email || !form.mobile_number || !form.gender || !form.birth_of_date) {
+      setFormError('Employee code, first name, email, mobile, gender and birth date are required.'); return;
     }
     setFormError(''); setSaving(true);
     try {
@@ -235,7 +235,7 @@ export default function AdminEmployees() {
                     <input className="form-control" placeholder="Optional" value={form.middle_name} onChange={sf('middle_name')} />
                   </div>
                   <div className="form-group" style={{ margin:0 }}>
-                    <label className="form-label">Last Name <span className="required">*</span></label>
+                    <label className="form-label">Last Name</label>
                     <input className="form-control" placeholder="Last name" value={form.last_name} onChange={sf('last_name')} />
                   </div>
                 </div>

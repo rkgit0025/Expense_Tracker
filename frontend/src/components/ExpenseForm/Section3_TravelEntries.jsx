@@ -1,19 +1,36 @@
 import React from 'react';
-import { formatINR } from '../../utils/helpers';
+import { formatINR, calcDays } from '../../utils/helpers';
 
 const MODES = ['Bike', 'Auto', 'Taxi', 'Bus', 'Train', 'Flight', 'Own Vehicle', 'Other'];
 
 const today = new Date().toISOString().split('T')[0]; // block future dates
 
 const emptyRow = () => ({
-  from_date: '', to_date: '', from_location: '', to_location: '', mode_of_travel: 'Taxi', amount: ''
+  from_date: '', to_date: '', from_location: '', to_location: '', mode_of_travel: 'Taxi', amount: '', no_of_days: 0, total_amount: 0
 });
 
 export default function Section3_TravelEntries({ rows, onChange, readOnly }) {
-  const update = (idx, field, val) => onChange(rows.map((r, i) => i === idx ? { ...r, [field]: val } : r));
+  const update = (idx, field, val) => {
+    onChange(rows.map((r, i) => {
+      if (i !== idx) return r;
+      const updated = { ...r, [field]: val };
+      // Recalculate days when dates change
+      if (field === 'from_date' || field === 'to_date') {
+        updated.no_of_days = calcDays(
+          field === 'from_date' ? val : r.from_date,
+          field === 'to_date'   ? val : r.to_date
+        );
+      }
+      // Recalculate total_amount = days * amount_per_day
+      const days   = updated.no_of_days  || 0;
+      const amount = parseFloat(field === 'amount' ? val : updated.amount) || 0;
+      updated.total_amount = days > 0 ? days * amount : amount;
+      return updated;
+    }));
+  };
   const addRow = () => onChange([...rows, emptyRow()]);
   const delRow = (idx) => onChange(rows.filter((_, i) => i !== idx));
-  const total  = rows.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
+  const total  = rows.reduce((s, r) => s + (parseFloat(r.total_amount ?? r.amount) || 0), 0);
 
   return (
     <div className="card">
@@ -62,10 +79,21 @@ export default function Section3_TravelEntries({ rows, onChange, readOnly }) {
               </select>
             </div>
             <div className="form-group" style={{ margin: 0 }}>
-              <label className="form-label">Amount (₹)</label>
+              <label className="form-label">Amount / Day (₹)</label>
               <input type="number" className="form-control" placeholder="0.00" min="0" step="0.01"
                 value={row.amount} disabled={readOnly}
                 onChange={e => update(idx, 'amount', e.target.value)} />
+            </div>
+            <div className="form-group" style={{ margin: 0 }}>
+              <label className="form-label">No. of Days</label>
+              <input className="form-control readonly-styled" readOnly
+                value={row.no_of_days > 0 ? row.no_of_days : (row.from_date ? 1 : 0)} />
+            </div>
+            <div className="form-group" style={{ margin: 0 }}>
+              <label className="form-label">Total Amount (₹)</label>
+              <input className="form-control readonly-styled" readOnly
+                value={formatINR(row.total_amount ?? row.amount)}
+                style={{ fontWeight: 700, color: 'var(--navy)' }} />
             </div>
           </div>
         </div>

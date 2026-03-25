@@ -53,8 +53,8 @@ router.post('/employees', auth, adminOrHR, async (req, res) => {
       first_reporting_manager_emp_code, second_reporting_manager_emp_code
     } = req.body;
 
-    if (!emp_code || !first_name || !last_name || !email)
-      return res.status(400).json({ message: 'Employee code, first name, last name and email are required.' });
+    if (!emp_code || !first_name || !email)
+      return res.status(400).json({ message: 'Employee code, first name and email are required.' });
 
     const full_name = [first_name, middle_name, last_name].filter(Boolean).join(' ');
     const username  = email.toLowerCase().trim(); // username always matches email
@@ -129,8 +129,8 @@ router.post('/employees/bulk-upload', auth, adminOrHR, uploadMem.single('file'),
     const errors = [];
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i]; const rowNum = i + 2;
-      if (!r.emp_code || !r.first_name || !r.last_name || !r.email) {
-        errors.push(`Row ${rowNum}: emp_code, first_name, last_name, email required.`); skipped++; continue;
+      if (!r.emp_code || !r.first_name || !r.email) {
+        errors.push(`Row ${rowNum}: emp_code, first_name, email required.`); skipped++; continue;
       }
       const full_name      = [r.first_name, r.middle_name, r.last_name].filter(Boolean).join(' ');
       const username       = String(r.email).toLowerCase().trim();
@@ -163,8 +163,8 @@ router.put('/employees/:id', auth, adminOrHR, async (req, res) => {
       first_reporting_manager_emp_code, second_reporting_manager_emp_code
     } = req.body;
 
-    if (!emp_code || !first_name || !last_name || !email)
-      return res.status(400).json({ message: 'Employee code, first name, last name and email are required.' });
+    if (!emp_code || !first_name || !email)
+      return res.status(400).json({ message: 'Employee code, first name and email are required.' });
 
     const full_name = [first_name, middle_name, last_name].filter(Boolean).join(' ');
     const username  = email.toLowerCase().trim(); // username always matches email

@@ -3,7 +3,7 @@ import { formatINR } from '../../utils/helpers';
 
 export default function TotalSummary({ journey, returns, stay, travel, food, hotel, misc }) {
   const sumDA  = [...(journey || []), ...(returns || []), ...(stay || [])].reduce((s, r) => s + (parseFloat(r.total_amount) || 0), 0);
-  const sumTrv = (travel || []).reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
+  const sumTrv = (travel || []).reduce((s, r) => s + (parseFloat(r.total_amount ?? r.amount) || 0), 0);
   const sumFd  = (food   || []).reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
   const sumHt  = (hotel  || []).reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
   const sumMisc= (misc   || []).reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
