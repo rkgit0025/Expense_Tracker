@@ -144,11 +144,30 @@ router.get('/export/csv', auth, async (req, res) => {
 router.get('/:id', auth, async (req, res) => {
   try {
     const expenseId = req.params.id;
+
+    // Detect whether override columns exist in expense_form
+    const [efCols] = await db.query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'expense_form'`
+    );
+    const efColNames = efCols.map(c => c.COLUMN_NAME);
+    const hasSiteOverride = efColNames.includes('site_location_override');
+    const hasCoordOverride = efColNames.includes('project_coordinator_hod_override');
+
+    const siteExpr  = hasSiteOverride
+      ? `COALESCE(NULLIF(ef.site_location_override,''), p.site_location)`
+      : `p.site_location`;
+    const coordExpr = hasCoordOverride
+      ? `COALESCE(NULLIF(ef.project_coordinator_hod_override,''), p.project_coordinator_hod)`
+      : `p.project_coordinator_hod`;
+
     const [[form]] = await db.query(
       `SELECT ef.*, e.full_name AS employee_name, e.emp_code, e.mobile_number,
               e.department_id,
               d.designation_name, dep.department_name,
-              p.project_code, p.project_name, p.site_location, p.project_coordinator_hod
+              p.project_code, p.project_name,
+              ${siteExpr} AS site_location,
+              ${coordExpr} AS project_coordinator_hod
        FROM expense_form ef
        JOIN employees   e   ON ef.emp_id         = e.emp_id
        LEFT JOIN designations d   ON e.designation_id = d.designation_id
@@ -202,18 +221,33 @@ router.post('/', auth, async (req, res) => {
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
-    const { project_id, journey, returns, stay, travel, food, hotel, misc } = req.body;
+    const { project_id, site_location_override, project_coordinator_hod_override,
+            journey, returns, stay, travel, food, hotel, misc } = req.body;
     if (!project_id) return res.status(400).json({ message: 'Project is required.' });
 
     const sumArr = (arr, key) => (arr || []).reduce((s, r) => s + (parseFloat(r[key]) || 0), 0);
     const totalClaim = sumArr(journey,'total_amount') + sumArr(returns,'total_amount') +
-                       sumArr(stay,'total_amount')    + sumArr(travel,'amount') +
+                       sumArr(stay,'total_amount')    + sumArr(travel,'total_amount') +
                        sumArr(food,'amount')          + sumArr(hotel,'amount') + sumArr(misc,'amount');
 
-    const [result] = await conn.query(
-      `INSERT INTO expense_form (emp_id,project_id,claim_amount,status) VALUES (?,?,?,'draft')`,
-      [req.user.emp_id, project_id, totalClaim]
+    // Save override fields only if the columns exist in expense_form
+    const [efColsPost] = await conn.query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'expense_form'`
     );
+    const efColNamesPost = efColsPost.map(c => c.COLUMN_NAME);
+    const hasSiteOvPost  = efColNamesPost.includes('site_location_override');
+    const hasCoordOvPost = efColNamesPost.includes('project_coordinator_hod_override');
+
+    let insertSQL, insertParams;
+    if (hasSiteOvPost && hasCoordOvPost) {
+      insertSQL = `INSERT INTO expense_form (emp_id,project_id,claim_amount,status,site_location_override,project_coordinator_hod_override) VALUES (?,?,?,'draft',?,?)`;
+      insertParams = [req.user.emp_id, project_id, totalClaim, site_location_override || null, project_coordinator_hod_override || null];
+    } else {
+      insertSQL = `INSERT INTO expense_form (emp_id,project_id,claim_amount,status) VALUES (?,?,?,'draft')`;
+      insertParams = [req.user.emp_id, project_id, totalClaim];
+    }
+    const [result] = await conn.query(insertSQL, insertParams);
     const expenseId = result.insertId;
 
     await insertAllowances(conn, expenseId, req.user.emp_id, 'journey_allowance', journey);
@@ -250,14 +284,31 @@ router.put('/:id', auth, async (req, res) => {
     if (!['draft','coordinator_rejected','hr_rejected','accounts_rejected'].includes(form.status) && req.user.role !== 'admin')
       return res.status(400).json({ message: 'Cannot edit at this status.' });
 
-    const { project_id, journey, returns, stay, travel, food, hotel, misc } = req.body;
+    const { project_id, site_location_override, project_coordinator_hod_override,
+            journey, returns, stay, travel, food, hotel, misc } = req.body;
     const sumArr = (arr, key) => (arr || []).reduce((s, r) => s + (parseFloat(r[key]) || 0), 0);
     const totalClaim = sumArr(journey,'total_amount') + sumArr(returns,'total_amount') +
-                       sumArr(stay,'total_amount')    + sumArr(travel,'amount') +
+                       sumArr(stay,'total_amount')    + sumArr(travel,'total_amount') +
                        sumArr(food,'amount')          + sumArr(hotel,'amount') + sumArr(misc,'amount');
 
-    await conn.query('UPDATE expense_form SET project_id=?,claim_amount=? WHERE expense_id=?',
-      [project_id, totalClaim, expenseId]);
+    // Save override fields only if the columns exist
+    const [efColsPut] = await conn.query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'expense_form'`
+    );
+    const efColNamesPut = efColsPut.map(c => c.COLUMN_NAME);
+    const hasSiteOvPut  = efColNamesPut.includes('site_location_override');
+    const hasCoordOvPut = efColNamesPut.includes('project_coordinator_hod_override');
+
+    if (hasSiteOvPut && hasCoordOvPut) {
+      await conn.query(
+        'UPDATE expense_form SET project_id=?,claim_amount=?,site_location_override=?,project_coordinator_hod_override=? WHERE expense_id=?',
+        [project_id, totalClaim, site_location_override || null, project_coordinator_hod_override || null, expenseId]
+      );
+    } else {
+      await conn.query('UPDATE expense_form SET project_id=?,claim_amount=? WHERE expense_id=?',
+        [project_id, totalClaim, expenseId]);
+    }
 
     for (const tbl of ['journey_allowance','return_allowance','stay_allowance',
                         'travel_entries','food_expenses','hotel_expenses','misc_expenses'])
@@ -593,32 +644,78 @@ async function assertCoordinatorDept(coordinatorEmpId, submitterEmpId) {
   }
 }
 
+// Normalise any date value to plain YYYY-MM-DD so MySQL DATE columns always accept it.
+// Handles: '2026-03-13' (already fine), '2026-03-13T00:00:00.000Z' (ISO from JS Date),
+// JS Date objects, and null/undefined → null.
+function toDate(val) {
+  if (!val) return null;
+  const s = String(val);
+  // Already plain date
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  // ISO string — take the date part before 'T'
+  if (s.includes('T')) return s.split('T')[0];
+  // Fallback: let JS parse it
+  const d = new Date(s);
+  if (isNaN(d)) return null;
+  return d.toISOString().split('T')[0];
+}
+
 async function insertAllowances(conn, expenseId, empId, table, rows) {
   if (!rows?.length) return;
   await conn.query(
     `INSERT INTO ${table} (expense_id,emp_id,from_date,to_date,scope,no_of_days,amount_per_day,total_amount) VALUES ?`,
-    [rows.map(r => [expenseId, empId, r.from_date, r.to_date, r.scope, r.no_of_days, r.amount_per_day||0, r.total_amount||0])]
+    [rows.map(r => [expenseId, empId, toDate(r.from_date), toDate(r.to_date), r.scope, r.no_of_days||0, r.amount_per_day||0, r.total_amount||0])]
   );
 }
 async function insertTravel(conn, expenseId, rows) {
   if (!rows?.length) return;
-  await conn.query('INSERT INTO travel_entries (expense_id,from_date,to_date,from_location,to_location,mode_of_travel,amount) VALUES ?',
-    [rows.map(r => [expenseId, r.from_date, r.to_date, r.from_location, r.to_location, r.mode_of_travel, r.amount])]);
+  // Detect whether the new columns exist (added by migration)
+  const [cols] = await conn.query(
+    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'travel_entries'`
+  );
+  const colNames = cols.map(c => c.COLUMN_NAME);
+  const hasNoOfDays    = colNames.includes('no_of_days');
+  const hasTotalAmount = colNames.includes('total_amount');
+
+  if (hasNoOfDays && hasTotalAmount) {
+    // Migrated schema: store per-day rate, days count, and computed total separately
+    await conn.query(
+      'INSERT INTO travel_entries (expense_id,from_date,to_date,from_location,to_location,mode_of_travel,amount,no_of_days,total_amount) VALUES ?',
+      [rows.map(r => [
+        expenseId,
+        toDate(r.from_date), toDate(r.to_date), r.from_location, r.to_location, r.mode_of_travel,
+        parseFloat(r.amount) || 0,
+        parseInt(r.no_of_days) || 0,
+        parseFloat(r.total_amount) || parseFloat(r.amount) || 0,
+      ])]
+    );
+  } else {
+    // Original schema: store computed total in amount column so multi-day totals are correct
+    await conn.query(
+      'INSERT INTO travel_entries (expense_id,from_date,to_date,from_location,to_location,mode_of_travel,amount) VALUES ?',
+      [rows.map(r => [
+        expenseId,
+        toDate(r.from_date), toDate(r.to_date), r.from_location, r.to_location, r.mode_of_travel,
+        parseFloat(r.total_amount) || parseFloat(r.amount) || 0,
+      ])]
+    );
+  }
 }
 async function insertFood(conn, expenseId, rows) {
   if (!rows?.length) return;
   await conn.query('INSERT INTO food_expenses (expense_id,from_date,to_date,sharing,location,amount) VALUES ?',
-    [rows.map(r => [expenseId, r.from_date, r.to_date, r.sharing, r.location, r.amount])]);
+    [rows.map(r => [expenseId, toDate(r.from_date), toDate(r.to_date), r.sharing, r.location, r.amount])]);
 }
 async function insertHotel(conn, expenseId, rows) {
   if (!rows?.length) return;
   await conn.query('INSERT INTO hotel_expenses (expense_id,from_date,to_date,sharing,location,amount) VALUES ?',
-    [rows.map(r => [expenseId, r.from_date, r.to_date, r.sharing, r.location, r.amount])]);
+    [rows.map(r => [expenseId, toDate(r.from_date), toDate(r.to_date), r.sharing, r.location, r.amount])]);
 }
 async function insertMisc(conn, expenseId, rows) {
   if (!rows?.length) return;
   await conn.query('INSERT INTO misc_expenses (expense_id,expense_date,reason,location,amount) VALUES ?',
-    [rows.map(r => [expenseId, r.expense_date, r.reason, r.location, r.amount])]);
+    [rows.map(r => [expenseId, toDate(r.expense_date), r.reason, r.location, r.amount])]);
 }
 async function logHistory(dbConn, expenseId, actionByEmpId, action, prevStatus, newStatus, comment) {
   await dbConn.query(
@@ -631,10 +728,25 @@ async function logHistory(dbConn, expenseId, actionByEmpId, action, prevStatus, 
 router.get('/:id/pdf', auth, async (req, res) => {
   try {
     const expenseId = req.params.id;
+    // Detect override columns
+    const [efColsPdf] = await db.query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'expense_form'`
+    );
+    const efColNamesPdf = efColsPdf.map(c => c.COLUMN_NAME);
+    const siteExprPdf  = efColNamesPdf.includes('site_location_override')
+      ? `COALESCE(NULLIF(ef.site_location_override,''), p.site_location)`
+      : `p.site_location`;
+    const coordExprPdf = efColNamesPdf.includes('project_coordinator_hod_override')
+      ? `COALESCE(NULLIF(ef.project_coordinator_hod_override,''), p.project_coordinator_hod)`
+      : `p.project_coordinator_hod`;
+
     const [[form]] = await db.query(
       `SELECT ef.*, e.full_name AS employee_name, e.emp_code, e.mobile_number,
               e.department_id, d.designation_name, dep.department_name,
-              p.project_code, p.project_name, p.site_location, p.project_coordinator_hod
+              p.project_code, p.project_name,
+              ${siteExprPdf} AS site_location,
+              ${coordExprPdf} AS project_coordinator_hod
        FROM expense_form ef
        JOIN employees   e   ON ef.emp_id   = e.emp_id
        LEFT JOIN designations d   ON e.designation_id = d.designation_id

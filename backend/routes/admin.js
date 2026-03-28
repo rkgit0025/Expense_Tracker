@@ -19,6 +19,23 @@ const uploadMem = multer({ storage: multer.memoryStorage(), limits: { fileSize: 
 // EMPLOYEES
 // ═══════════════════════════════════════════════════════════════
 
+// ── GET /admin/employees/list  — lightweight employee list for dropdowns (all authenticated roles) ──
+router.get('/employees/list', auth, async (req, res) => {
+  try {
+    const [rows] = await db.query(
+      `SELECT e.emp_id, e.emp_code, e.full_name, d.designation_name
+       FROM employees e
+       LEFT JOIN designations d ON e.designation_id = d.designation_id
+       ORDER BY e.full_name`
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error.' });
+  }
+});
+
+// ── GET /admin/employees — full employee list (admin/HR only) ────────────────
 router.get('/employees', auth, adminOrHR, async (req, res) => {
   try {
     const [rows] = await db.query(

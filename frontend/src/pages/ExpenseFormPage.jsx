@@ -13,7 +13,7 @@ import Section7_Receipts        from '../components/ExpenseForm/Section7_Receipt
 import TotalSummary             from '../components/ExpenseForm/TotalSummary';
 
 const emptyDA    = () => ({ from_date: '', to_date: '', scope: 'DA-Metro', no_of_days: 0, amount_per_day: 0, total_amount: 0 });
-const emptyTravel= () => ({ from_date: '', to_date: '', from_location: '', to_location: '', mode_of_travel: 'Taxi', amount: '' });
+const emptyTravel= () => ({ from_date: '', to_date: '', from_location: '', to_location: '', mode_of_travel: 'Taxi', amount: '', no_of_days: 0, total_amount: 0 });
 const emptyFood  = () => ({ from_date: '', to_date: '', sharing: 1, location: '', amount: '' });
 const emptyHotel = () => ({ from_date: '', to_date: '', sharing: 1, location: '', amount: '' });
 const emptyMisc  = () => ({ expense_date: '', reason: '', location: '', amount: '' });

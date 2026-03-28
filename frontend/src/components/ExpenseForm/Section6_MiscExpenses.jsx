@@ -26,7 +26,8 @@ export default function Section6_MiscExpenses({ rows, onChange, readOnly }) {
         padding: '10px 14px', marginBottom: '16px', fontSize: '13px', color: '#7a5c00'
       }}>
         <span style={{ fontSize: '16px', flexShrink: 0 }}>⚠️</span>
-        <span><strong>Note:</strong> Do not add part purchase for site on this section.</span>
+        <span><strong>Note:</strong> All project site expenses—including freight, loading/unloading, material purchases,
+        spares, and contractor labor fees—must not be included in the travel claims. All other expenses can be claimed.</span>
       </div>
 
       {rows.map((row, idx) => (

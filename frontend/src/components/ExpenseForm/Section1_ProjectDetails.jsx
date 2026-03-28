@@ -9,7 +9,7 @@ export default function Section1_ProjectDetails({ data, onChange, readOnly }) {
 
   useEffect(() => {
     api.get('/projects').then(r => setProjects(r.data)).catch(() => {});
-    api.get('/admin/employees').then(r => setEmployees(r.data)).catch(() => {});
+    api.get('/admin/employees/list').then(r => setEmployees(r.data)).catch(() => {});
   }, []);
 
   const selected    = projects.find(p => p.project_id === parseInt(data.project_id));
