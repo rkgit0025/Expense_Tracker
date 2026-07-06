@@ -127,6 +127,17 @@ router.get('/employees/bulk-template', auth, adminOrHR, (req, res) => {
   res.send(buf);
 });
 
+// ── Helper: extract an emp_code from a cell that may be a plain code
+//    ("EMP-001") or a "Full Name (EMP-001)" style value (as shown in
+//    dropdowns elsewhere in the app). Falls back to the trimmed raw value. ──
+function extractEmpCode(value) {
+  if (!value) return null;
+  const str = String(value).trim();
+  if (!str) return null;
+  const match = str.match(/\(([^)]+)\)\s*$/); // grabs the code inside trailing parentheses
+  return (match ? match[1] : str).trim() || null;
+}
+
 // ── POST bulk upload (MUST be before /:id route) ─────────────────────────────
 router.post('/employees/bulk-upload', auth, adminOrHR, uploadMem.single('file'), async (req, res) => {
   try {
@@ -143,7 +154,13 @@ router.post('/employees/bulk-upload', auth, adminOrHR, uploadMem.single('file'),
     const deptMap  = Object.fromEntries(depts.map(d  => [d.department_name.toLowerCase().trim(),  d.department_id]));
     const locMap   = Object.fromEntries(locs.map(l   => [l.location_name.toLowerCase().trim(),    l.location_id]));
 
-    let created = 0, skipped = 0;
+    // Existing employees (for validating/resolving reporting-manager emp_codes,
+    // including managers being uploaded earlier in this very same file).
+    const [existingEmps] = await db.query('SELECT emp_code FROM employees');
+    const knownEmpCodes  = new Set(existingEmps.map(e => String(e.emp_code).toLowerCase().trim()));
+    rows.forEach(r => { if (r.emp_code) knownEmpCodes.add(String(r.emp_code).toLowerCase().trim()); });
+
+    let created = 0, updated = 0, skipped = 0;
     const errors = [];
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i]; const rowNum = i + 2;
@@ -151,20 +168,54 @@ router.post('/employees/bulk-upload', auth, adminOrHR, uploadMem.single('file'),
         errors.push(`Row ${rowNum}: emp_code, first_name, email required.`); skipped++; continue;
       }
       const full_name      = [r.first_name, r.middle_name, r.last_name].filter(Boolean).join(' ');
-      const username       = String(r.email).toLowerCase().trim();
+      const username        = String(r.email).toLowerCase().trim();
       const designation_id = desigMap[String(r.designation_name||'').toLowerCase().trim()] || null;
       const department_id  = deptMap[String(r.department_name||'').toLowerCase().trim()]   || null;
       const location_id    = locMap[String(r.location_name||'').toLowerCase().trim()]      || null;
+
+      // Reporting managers: accept plain emp_code OR "Full Name (EMP_CODE)"
+      // and detect/map the manager by their emp_code. If a code is supplied
+      // but doesn't match any known employee, flag it instead of silently
+      // saving a dangling reference.
+      let first_reporting_manager_emp_code  = extractEmpCode(r.first_reporting_manager_emp_code);
+      let second_reporting_manager_emp_code = extractEmpCode(r.second_reporting_manager_emp_code);
+      if (first_reporting_manager_emp_code && !knownEmpCodes.has(first_reporting_manager_emp_code.toLowerCase())) {
+        errors.push(`Row ${rowNum} (${r.emp_code}): first reporting manager code "${first_reporting_manager_emp_code}" not found — left unset.`);
+        first_reporting_manager_emp_code = null;
+      }
+      if (second_reporting_manager_emp_code && !knownEmpCodes.has(second_reporting_manager_emp_code.toLowerCase())) {
+        errors.push(`Row ${rowNum} (${r.emp_code}): second reporting manager code "${second_reporting_manager_emp_code}" not found — left unset.`);
+        second_reporting_manager_emp_code = null;
+      }
+
       try {
-        await db.query(
+        // ON DUPLICATE KEY UPDATE now refreshes every column, so re-uploading
+        // the same emp_code with edited fields (designation, manager, etc.)
+        // actually updates the existing employee instead of being a no-op.
+        const [result] = await db.query(
           `INSERT INTO employees (emp_code,username,first_name,middle_name,last_name,full_name,email,mobile_number,gender,category,birth_of_date,date_of_joining,designation_id,department_id,location_id,first_reporting_manager_emp_code,second_reporting_manager_emp_code)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE emp_code=emp_code`,
-          [String(r.emp_code),username,r.first_name,r.middle_name||null,r.last_name,full_name,username,r.mobile_number||null,r.gender||null,r.category||'Staff',r.birth_of_date||null,r.date_of_joining||null,designation_id,department_id,location_id,r.first_reporting_manager_emp_code||null,r.second_reporting_manager_emp_code||null]
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+           ON DUPLICATE KEY UPDATE
+             username=VALUES(username), first_name=VALUES(first_name), middle_name=VALUES(middle_name),
+             last_name=VALUES(last_name), full_name=VALUES(full_name), email=VALUES(email),
+             mobile_number=VALUES(mobile_number), gender=VALUES(gender), category=VALUES(category),
+             birth_of_date=VALUES(birth_of_date), date_of_joining=VALUES(date_of_joining),
+             designation_id=VALUES(designation_id), department_id=VALUES(department_id), location_id=VALUES(location_id),
+             first_reporting_manager_emp_code=VALUES(first_reporting_manager_emp_code),
+             second_reporting_manager_emp_code=VALUES(second_reporting_manager_emp_code)`,
+          [String(r.emp_code),username,r.first_name,r.middle_name||null,r.last_name,full_name,username,r.mobile_number||null,r.gender||null,r.category||'Staff',r.birth_of_date||null,r.date_of_joining||null,designation_id,department_id,location_id,first_reporting_manager_emp_code,second_reporting_manager_emp_code]
         );
-        created++;
+        // MySQL affectedRows semantics for INSERT ... ON DUPLICATE KEY UPDATE:
+        // 1 = new row inserted, 2 = existing row updated, 0 = existing row unchanged.
+        if (result.affectedRows === 2) updated++;
+        else if (result.affectedRows === 1) created++;
+        else updated++; // row matched but values identical — still counts as processed/up to date
       } catch (e) { errors.push(`Row ${rowNum} (${r.emp_code}): ${e.message}`); skipped++; }
     }
-    res.json({ message: `Bulk upload complete. ${created} created, ${skipped} skipped.`, created, skipped, errors });
+    res.json({
+      message: `Bulk upload complete. ${created} created, ${updated} updated, ${skipped} skipped.`,
+      created, updated, skipped, errors
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: 'Bulk upload failed: ' + err.message });
@@ -263,6 +314,7 @@ router.get('/users/unlinked', auth, adminOnly, async (req, res) => {
   try {
     const [rows] = await db.query(
       `SELECT e.emp_id, e.emp_code, e.full_name, e.email, e.username,
+              e.department_id, e.designation_id,
               d.designation_name, dep.department_name
        FROM employees e
        LEFT JOIN users u ON e.emp_id = u.emp_id
@@ -331,6 +383,79 @@ router.post('/users', auth, adminOnly, async (req, res) => {
       return res.status(409).json({ message: 'Username or email already in use.' });
     console.error(err);
     res.status(500).json({ message: 'Server error.' });
+  }
+});
+
+// ── POST /users/bulk-create — create accounts for many employees at once ─────
+// Accepts a list of emp_ids (selected individually, or gathered client-side
+// by filtering the unlinked-employees list by department/designation) and
+// creates a login account for each, reusing the same logic as the single
+// "Create Login Access" flow above.
+router.post('/users/bulk-create', auth, adminOnly, async (req, res) => {
+  try {
+    const { emp_ids, role, send_email } = req.body;
+    if (!Array.isArray(emp_ids) || emp_ids.length === 0)
+      return res.status(400).json({ message: 'Select at least one employee.' });
+    if (!role)
+      return res.status(400).json({ message: 'Role is required.' });
+
+    const { sendInviteEmail } = require('../config/mailer');
+    const loginUrl = `${process.env.CLIENT_URL}/login`;
+
+    let created = 0, skipped = 0;
+    const results = [];
+    const errors  = [];
+
+    for (const emp_id of emp_ids) {
+      try {
+        const [[emp]] = await db.query('SELECT * FROM employees WHERE emp_id=?', [emp_id]);
+        if (!emp) { errors.push(`Employee #${emp_id}: not found.`); skipped++; continue; }
+
+        const [[existing]] = await db.query('SELECT user_id FROM users WHERE emp_id=?', [emp_id]);
+        if (existing) { errors.push(`${emp.full_name} (${emp.emp_code}): already has a login account — skipped.`); skipped++; continue; }
+
+        const tempPassword = 'Temp@' + crypto.randomBytes(4).toString('hex').toUpperCase();
+        const hash         = await bcrypt.hash(tempPassword, 10);
+        const username      = emp.email.toLowerCase().trim();
+
+        await db.query(
+          `INSERT INTO users (emp_id, username, email, password, role, must_change_password) VALUES (?,?,?,?,?,1)`,
+          [emp_id, username, emp.email, hash, role]
+        );
+
+        let emailSent = false, emailError = null;
+        if (send_email) {
+          try {
+            await sendInviteEmail({
+              to: emp.email,
+              fullName: emp.full_name || `${emp.first_name} ${emp.last_name}`,
+              username, tempPassword, loginUrl,
+            });
+            emailSent = true;
+          } catch (e) { emailError = e.message; console.warn('Bulk invite email failed (non-fatal):', e.message); }
+        }
+
+        await logAudit(db, req, 'user_created', 'user', null, emp.full_name,
+          `Created login account for ${emp.full_name} (${emp.emp_code}) with role: ${role} (bulk creation)`);
+
+        results.push({
+          emp_id, full_name: emp.full_name, emp_code: emp.emp_code,
+          username, tempPassword, email_sent: emailSent, email_error: emailError,
+        });
+        created++;
+      } catch (e) {
+        if (e.code === 'ER_DUP_ENTRY') { errors.push(`Employee #${emp_id}: username/email already in use — skipped.`); skipped++; }
+        else { errors.push(`Employee #${emp_id}: ${e.message}`); skipped++; }
+      }
+    }
+
+    res.json({
+      message: `Bulk account creation complete. ${created} created, ${skipped} skipped.`,
+      created, skipped, results, errors,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Bulk account creation failed: ' + err.message });
   }
 });
 

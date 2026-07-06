@@ -30,8 +30,8 @@ router.get('/', auth, async (req, res) => {
 
 // ── GET bulk template — MUST be before /:id ──────────────────────────────────
 router.get('/bulk-template', auth, adminOrHR, (req, res) => {
-  const headers = ['project_code', 'project_name', 'site_location', 'project_coordinator_hod'];
-  const sample  = ['PRJ-010', 'New Bridge Project', 'Mumbai', 'Rajesh Kumar'];
+  const headers = ['project_code', 'project_name', 'site_location', 'project_coordinator_hod_emp_code'];
+  const sample  = ['PRJ-010', 'New Bridge Project', 'Mumbai', 'EMP-000'];
 
   const wb = xlsx.utils.book_new();
   const ws = xlsx.utils.aoa_to_sheet([headers, sample]);
@@ -55,7 +55,13 @@ router.post('/bulk-upload', auth, adminOrHR, uploadMem.single('file'), async (re
 
     if (!rows.length) return res.status(400).json({ message: 'File is empty.' });
 
-    let created = 0, skipped = 0;
+    // Look up employees so the coordinator/HOD column can be supplied as an
+    // emp_code and auto-resolved to "Full Name (EMP_CODE)" — same format
+    // used in the Project Coordinator / HOD dropdown elsewhere in the app.
+    const [emps]   = await db.query('SELECT emp_code, full_name FROM employees');
+    const empByCode = new Map(emps.map(e => [String(e.emp_code).toLowerCase().trim(), e]));
+
+    let created = 0, updated = 0, skipped = 0;
     const errors = [];
 
     for (let i = 0; i < rows.length; i++) {
@@ -67,15 +73,44 @@ router.post('/bulk-upload', auth, adminOrHR, uploadMem.single('file'), async (re
         skipped++; continue;
       }
 
+      // Resolve coordinator/HOD by emp_code (new column). Also checks the
+      // legacy free-text "project_coordinator_hod" column in case that value
+      // is actually an emp_code (e.g. someone used an older template) — if it
+      // matches a known employee it still gets auto-resolved to "Name (Code)".
+      // Otherwise the legacy column is kept as-is (plain text name).
+      let coordinatorHod = '';
+      const coordCode = String(r.project_coordinator_hod_emp_code || '').trim();
+      const legacyVal  = String(r.project_coordinator_hod || '').trim();
+      if (coordCode) {
+        const emp = empByCode.get(coordCode.toLowerCase());
+        if (emp) {
+          coordinatorHod = `${emp.full_name} (${emp.emp_code})`;
+        } else {
+          errors.push(`Row ${rowNum} (${r.project_code}): coordinator/HOD emp_code "${coordCode}" not found — left blank.`);
+        }
+      } else if (legacyVal) {
+        const empByLegacyCode = empByCode.get(legacyVal.toLowerCase());
+        coordinatorHod = empByLegacyCode
+          ? `${empByLegacyCode.full_name} (${empByLegacyCode.emp_code})`
+          : legacyVal;
+      }
+
       try {
-        await db.query(
+        // ON DUPLICATE KEY UPDATE now refreshes all editable fields, so
+        // re-uploading the same project_code with changes actually updates it.
+        const [result] = await db.query(
           `INSERT INTO projects (project_code, project_name, site_location, project_coordinator_hod)
            VALUES (?, ?, ?, ?)
-           ON DUPLICATE KEY UPDATE project_name=VALUES(project_name)`,
+           ON DUPLICATE KEY UPDATE
+             project_name=VALUES(project_name),
+             site_location=VALUES(site_location),
+             project_coordinator_hod=VALUES(project_coordinator_hod)`,
           [String(r.project_code).trim(), String(r.project_name).trim(),
-           r.site_location || '', r.project_coordinator_hod || '']
+           r.site_location || '', coordinatorHod]
         );
-        created++;
+        if (result.affectedRows === 2) updated++;
+        else if (result.affectedRows === 1) created++;
+        else updated++;
       } catch (e) {
         errors.push(`Row ${rowNum} (${r.project_code}): ${e.message}`);
         skipped++;
@@ -83,8 +118,8 @@ router.post('/bulk-upload', auth, adminOrHR, uploadMem.single('file'), async (re
     }
 
     res.json({
-      message: `Bulk upload complete. ${created} created/updated, ${skipped} skipped.`,
-      created, skipped, errors
+      message: `Bulk upload complete. ${created} created, ${updated} updated, ${skipped} skipped.`,
+      created, updated, skipped, errors
     });
   } catch (err) {
     console.error(err);

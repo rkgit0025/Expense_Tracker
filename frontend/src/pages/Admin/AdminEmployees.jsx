@@ -2,6 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import api from '../../api/axios';
 import { formatDate } from '../../utils/helpers';
 import { useToast, useDialog } from '../../context/UIContext';
+import Pagination from '../../components/Pagination';
 
 const emptyForm = {
   first_name:'', middle_name:'', last_name:'',
@@ -30,6 +31,8 @@ export default function AdminEmployees() {
   const [saving,       setSaving]       = useState(false);
   const [search,       setSearch]       = useState('');
   const [deptFilter,   setDeptFilter]   = useState('');
+  const [page,         setPage]         = useState(1);
+  const [pageSize,     setPageSize]     = useState(25);
   const [showBulk,     setShowBulk]     = useState(false);
   const [bulkResult,   setBulkResult]   = useState(null);
   const [bulkLoading,  setBulkLoading]  = useState(false);
@@ -133,6 +136,12 @@ export default function AdminEmployees() {
       && (!deptFilter || String(e.department_id) === deptFilter);
   });
 
+  // Reset to page 1 whenever filters change
+  useEffect(() => { setPage(1); }, [search, deptFilter, employees.length]);
+  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const safePage  = Math.min(page, pageCount);
+  const paginated = filtered.slice((safePage - 1) * pageSize, safePage * pageSize);
+
   const fullName = getFullName(form);
   const username = getUsername(form);
 
@@ -173,7 +182,7 @@ export default function AdminEmployees() {
                 <tr><th>Employee</th><th>Code</th><th>Dept / Designation</th><th>Location</th><th>Contact</th><th>Login</th><th>Actions</th></tr>
               </thead>
               <tbody>
-                {filtered.map(e => (
+                {paginated.map(e => (
                   <tr key={e.emp_id}>
                     <td>
                       <div style={{ fontWeight:600 }}>{e.full_name}</div>
@@ -207,9 +216,9 @@ export default function AdminEmployees() {
             </table>
           </div>
         )}
-        <div style={{ padding:'10px 16px', fontSize:12, color:'var(--gray-400)', borderTop:'1px solid var(--gray-100)' }}>
-          Showing {filtered.length} of {employees.length} employees
-        </div>
+        <Pagination page={safePage} pageSize={pageSize} total={filtered.length}
+          onPageChange={setPage} onPageSizeChange={n => { setPageSize(n); setPage(1); }}
+          itemLabel="employees" />
       </div>
 
       {/* Add / Edit Modal */}
@@ -370,6 +379,8 @@ export default function AdminEmployees() {
                   <li>Download the Excel template below</li>
                   <li>Fill in employee data (one per row)</li>
                   <li>Designation, Department &amp; Location must match existing names exactly</li>
+                  <li>Reporting managers can be entered by emp code — they're matched and mapped automatically</li>
+                  <li>Re-uploading a file with the same emp code updates that employee's details (including any manager added later)</li>
                   <li>Upload the completed file</li>
                 </ol>
               </div>

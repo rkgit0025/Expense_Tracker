@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import api from '../../api/axios';
 import { formatDate } from '../../utils/helpers';
 import { useToast, useDialog } from '../../context/UIContext';
+import Pagination from '../../components/Pagination';
 
 const ROLES = ['employee', 'coordinator', 'hr', 'accounts', 'admin'];
 const ROLE_COLORS = {
@@ -41,12 +42,25 @@ export default function AdminUsers() {
   const [resetResult,    setResetResult]    = useState(null);
   const [search,       setSearch]       = useState('');
   const [roleFilter,   setRoleFilter]   = useState('');
+  const [page,         setPage]         = useState(1);
+  const [pageSize,     setPageSize]     = useState(25);
   const [formError,    setFormError]    = useState('');
   const [saving,       setSaving]       = useState(false);
 
   // Create form — no password field, auto-generated on backend
   const [createForm,   setCreateForm]   = useState({ emp_id:'', role:'employee', send_email: true });
   const [createResult, setCreateResult] = useState(null);
+
+  // Bulk create — select multiple employees (optionally via dept/designation filter)
+  const [showBulkCreate,  setShowBulkCreate]  = useState(false);
+  const [bulkDeptFilter,  setBulkDeptFilter]  = useState('');
+  const [bulkDesigFilter, setBulkDesigFilter] = useState('');
+  const [bulkSearch,      setBulkSearch]      = useState('');
+  const [bulkSelected,    setBulkSelected]    = useState([]); // emp_ids
+  const [bulkRole,        setBulkRole]        = useState('employee');
+  const [bulkSendEmail,   setBulkSendEmail]   = useState(true);
+  const [bulkResult,      setBulkResult]      = useState(null);
+  const [bulkSaving,      setBulkSaving]      = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -82,6 +96,49 @@ export default function AdminUsers() {
     } catch (err) {
       setFormError(err.response?.data?.message || 'Failed to create user.');
     } finally { setSaving(false); }
+  };
+
+  // ── Bulk create users ────────────────────────────────────────────────────
+  const openBulkCreate = () => {
+    setBulkDeptFilter(''); setBulkDesigFilter(''); setBulkSearch('');
+    setBulkSelected([]); setBulkRole('employee'); setBulkSendEmail(true);
+    setBulkResult(null); setShowBulkCreate(true);
+  };
+
+  const bulkFiltered = unlinked.filter(e => {
+    const q = bulkSearch.toLowerCase();
+    const ms = !q || e.full_name?.toLowerCase().includes(q) || e.emp_code?.toLowerCase().includes(q);
+    const md = !bulkDeptFilter  || String(e.department_id)   === bulkDeptFilter;
+    const mg = !bulkDesigFilter || String(e.designation_id)  === bulkDesigFilter;
+    return ms && md && mg;
+  });
+  const bulkDepts = [...new Map(unlinked.filter(e=>e.department_id).map(e => [e.department_id, e.department_name])).entries()];
+  const bulkDesigs = [...new Map(unlinked.filter(e=>e.designation_id).map(e => [e.designation_id, e.designation_name])).entries()];
+
+  const toggleBulkSelect = (emp_id) => {
+    setBulkSelected(prev => prev.includes(emp_id) ? prev.filter(id => id !== emp_id) : [...prev, emp_id]);
+  };
+  const allFilteredSelected = bulkFiltered.length > 0 && bulkFiltered.every(e => bulkSelected.includes(e.emp_id));
+  const toggleSelectAllFiltered = () => {
+    if (allFilteredSelected) {
+      setBulkSelected(prev => prev.filter(id => !bulkFiltered.some(e => e.emp_id === id)));
+    } else {
+      setBulkSelected(prev => [...new Set([...prev, ...bulkFiltered.map(e => e.emp_id)])]);
+    }
+  };
+
+  const handleBulkCreate = async () => {
+    if (bulkSelected.length === 0) { setFormError('Select at least one employee.'); return; }
+    setFormError(''); setBulkSaving(true);
+    try {
+      const { data } = await api.post('/admin/users/bulk-create', {
+        emp_ids: bulkSelected, role: bulkRole, send_email: bulkSendEmail,
+      });
+      setBulkResult(data);
+      load();
+    } catch (err) {
+      setFormError(err.response?.data?.message || 'Bulk creation failed.');
+    } finally { setBulkSaving(false); }
   };
 
   // ── Edit role/status ──────────────────────────────────────────────────────
@@ -155,6 +212,12 @@ export default function AdminUsers() {
     return ms && mr;
   });
 
+  // Reset to page 1 whenever filters change
+  useEffect(() => { setPage(1); }, [search, roleFilter, users.length]);
+  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const safePage  = Math.min(page, pageCount);
+  const paginated = filtered.slice((safePage - 1) * pageSize, safePage * pageSize);
+
   const selectedEmp = unlinked.find(e => e.emp_id === parseInt(createForm.emp_id));
 
   return (
@@ -167,6 +230,7 @@ export default function AdminUsers() {
         </div>
         <div style={{ display:'flex', gap:8 }}>
           <button className="btn btn-ghost" onClick={() => setShowPerms(true)}>📋 Role Permissions</button>
+          <button className="btn btn-ghost" onClick={openBulkCreate}>👥 Bulk Create Accounts</button>
           <button className="btn btn-amber" onClick={openCreate}>➕ Create Account</button>
         </div>
       </div>
@@ -204,7 +268,7 @@ export default function AdminUsers() {
                 <tr><th>Employee</th><th>Username</th><th>Role</th><th>Status</th><th>Created</th><th>Actions</th></tr>
               </thead>
               <tbody>
-                {filtered.map(u => (
+                {paginated.map(u => (
                   <tr key={u.user_id}>
                     <td>
                       <div style={{ fontWeight:600 }}>{u.full_name}</div>
@@ -233,6 +297,9 @@ export default function AdminUsers() {
             </table>
           </div>
         )}
+        <Pagination page={safePage} pageSize={pageSize} total={filtered.length}
+          onPageChange={setPage} onPageSizeChange={n => { setPageSize(n); setPage(1); }}
+          itemLabel="users" />
       </div>
 
       {/* ── CREATE USER MODAL ─────────────────────────────────────── */}
@@ -359,6 +426,153 @@ export default function AdminUsers() {
                 <button className="btn btn-ghost" onClick={() => setShowCreate(false)}>Cancel</button>
                 <button className="btn btn-primary" onClick={handleCreate} disabled={saving || !createForm.emp_id}>
                   {saving ? '⏳ Creating…' : '✅ Create Login Access'}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── BULK CREATE USERS MODAL ─────────────────────────────────── */}
+      {showBulkCreate && (
+        <div className="modal-overlay">
+          <div className="modal" style={{ maxWidth:640 }}>
+            <div className="modal-header">
+              <span className="modal-title">👥 Bulk Create Login Accounts</span>
+              <button className="btn btn-ghost btn-sm btn-icon" onClick={() => setShowBulkCreate(false)}>✕</button>
+            </div>
+            <div className="modal-body" style={{ maxHeight:'75vh', overflowY:'auto' }}>
+
+              {/* RESULT STATE */}
+              {bulkResult ? (
+                <div>
+                  <div className="alert alert-success">✅ {bulkResult.message}</div>
+
+                  {bulkResult.results?.length > 0 && (
+                    <div style={{ marginTop:12, border:'1px solid var(--gray-100)', borderRadius:'var(--radius)', overflow:'hidden' }}>
+                      <table style={{ width:'100%', fontSize:12 }}>
+                        <thead>
+                          <tr style={{ background:'var(--gray-50)' }}>
+                            <th style={{ padding:'6px 10px', textAlign:'left' }}>Employee</th>
+                            <th style={{ padding:'6px 10px', textAlign:'left' }}>Username</th>
+                            <th style={{ padding:'6px 10px', textAlign:'left' }}>Temp Password</th>
+                            <th style={{ padding:'6px 10px', textAlign:'left' }}>Email</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {bulkResult.results.map(r => (
+                            <tr key={r.emp_id} style={{ borderTop:'1px solid var(--gray-100)' }}>
+                              <td style={{ padding:'6px 10px' }}>{r.full_name} <span style={{ color:'var(--gray-400)' }}>({r.emp_code})</span></td>
+                              <td style={{ padding:'6px 10px', fontFamily:'var(--mono)' }}>{r.username}</td>
+                              <td style={{ padding:'6px 10px', fontFamily:'var(--mono)', fontWeight:700 }}>{r.tempPassword}</td>
+                              <td style={{ padding:'6px 10px' }}>{r.email_sent ? '✉️ Sent' : '⚠️ Not sent'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {bulkResult.errors?.length > 0 && (
+                    <div className="alert alert-danger" style={{ marginTop:12 }}>
+                      <div style={{ fontWeight:600, marginBottom:4 }}>⚠️ Some rows were skipped:</div>
+                      <ul style={{ margin:0, paddingLeft:18, fontSize:12 }}>
+                        {bulkResult.errors.map((e,i) => <li key={i}>{e}</li>)}
+                      </ul>
+                    </div>
+                  )}
+
+                  <button className="btn btn-primary w-full" style={{ marginTop:16 }} onClick={() => setShowBulkCreate(false)}>Done</button>
+                </div>
+              ) : (
+                /* SELECTION FORM */
+                <>
+                  {formError && <div className="alert alert-danger">⚠️ {formError}</div>}
+
+                  {unlinked.length === 0 ? (
+                    <div className="alert alert-info">✅ All employees already have login accounts.</div>
+                  ) : (
+                    <>
+                      {/* Filters */}
+                      <div className="grid-2" style={{ marginBottom:10 }}>
+                        <select className="form-select" value={bulkDeptFilter} onChange={e => setBulkDeptFilter(e.target.value)}>
+                          <option value="">All Departments</option>
+                          {bulkDepts.map(([id,name]) => <option key={id} value={id}>{name}</option>)}
+                        </select>
+                        <select className="form-select" value={bulkDesigFilter} onChange={e => setBulkDesigFilter(e.target.value)}>
+                          <option value="">All Designations</option>
+                          {bulkDesigs.map(([id,name]) => <option key={id} value={id}>{name}</option>)}
+                        </select>
+                      </div>
+                      <input className="form-control" style={{ marginBottom:10 }}
+                        placeholder="🔍 Search name or emp code…"
+                        value={bulkSearch} onChange={e => setBulkSearch(e.target.value)} />
+
+                      {/* Select-all + count */}
+                      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:6 }}>
+                        <label style={{ display:'flex', alignItems:'center', gap:8, fontSize:13, cursor:'pointer' }}>
+                          <input type="checkbox" checked={allFilteredSelected} onChange={toggleSelectAllFiltered} />
+                          Select all shown ({bulkFiltered.length})
+                        </label>
+                        <span style={{ fontSize:12, color:'var(--gray-400)' }}>{bulkSelected.length} selected</span>
+                      </div>
+
+                      {/* Employee checklist */}
+                      <div style={{ border:'1px solid var(--gray-100)', borderRadius:'var(--radius)', maxHeight:240, overflowY:'auto' }}>
+                        {bulkFiltered.map(e => (
+                          <label key={e.emp_id} style={{
+                            display:'flex', alignItems:'center', gap:10, padding:'8px 12px',
+                            borderBottom:'1px solid var(--gray-100)', cursor:'pointer',
+                          }}>
+                            <input type="checkbox" checked={bulkSelected.includes(e.emp_id)}
+                              onChange={() => toggleBulkSelect(e.emp_id)} />
+                            <div style={{ flex:1 }}>
+                              <div style={{ fontWeight:600, fontSize:13 }}>{e.full_name} <span style={{ color:'var(--gray-400)', fontWeight:400 }}>({e.emp_code})</span></div>
+                              <div style={{ fontSize:11, color:'var(--gray-400)' }}>{e.department_name||'No dept'} · {e.designation_name||'No designation'} · {e.email}</div>
+                            </div>
+                          </label>
+                        ))}
+                        {bulkFiltered.length === 0 && (
+                          <div style={{ padding:20, textAlign:'center', color:'var(--gray-300)', fontSize:13 }}>No employees match this filter.</div>
+                        )}
+                      </div>
+
+                      {/* Role for the whole batch */}
+                      <div className="form-group" style={{ marginTop:12 }}>
+                        <label className="form-label">Assign Role to all selected <span className="required">*</span></label>
+                        <select className="form-select" value={bulkRole} onChange={e => setBulkRole(e.target.value)}>
+                          {ROLES.map(r => <option key={r} value={r}>{r.charAt(0).toUpperCase()+r.slice(1)}</option>)}
+                        </select>
+                      </div>
+
+                      <div style={{ background:'var(--gray-50)', borderRadius:'var(--radius)', padding:'12px 14px', border:'1px solid var(--gray-100)' }}>
+                        <label style={{ display:'flex', alignItems:'flex-start', gap:12, cursor:'pointer' }}>
+                          <input type="checkbox" checked={bulkSendEmail}
+                            onChange={e => setBulkSendEmail(e.target.checked)}
+                            style={{ width:16, height:16, marginTop:2, flexShrink:0 }} />
+                          <div>
+                            <div style={{ fontWeight:600, fontSize:13 }}>📧 Send invitation emails to all selected employees</div>
+                            <div style={{ fontSize:12, color:'var(--gray-400)', marginTop:3 }}>
+                              Each employee's username and temporary password will also be shown here after creation.
+                            </div>
+                          </div>
+                        </label>
+                      </div>
+
+                      <div className="alert alert-info" style={{ marginTop:12 }}>
+                        🔑 A unique temporary password is auto-generated per employee. Everyone must change it on first login.
+                      </div>
+                    </>
+                  )}
+                </>
+              )}
+            </div>
+
+            {!bulkResult && unlinked.length > 0 && (
+              <div className="modal-footer">
+                <button className="btn btn-ghost" onClick={() => setShowBulkCreate(false)}>Cancel</button>
+                <button className="btn btn-primary" onClick={handleBulkCreate} disabled={bulkSaving || bulkSelected.length === 0}>
+                  {bulkSaving ? '⏳ Creating…' : `✅ Create ${bulkSelected.length || ''} Account${bulkSelected.length===1?'':'s'}`}
                 </button>
               </div>
             )}

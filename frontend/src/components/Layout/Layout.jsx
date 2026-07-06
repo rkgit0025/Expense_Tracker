@@ -43,7 +43,7 @@ export default function Layout() {
 
       <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-logo">
-          <div className="logo-text">💼 ExpenseTrack</div>
+          <div className="logo-text">💼 ExpenseTracker</div>
           <div className="logo-sub">Enterprise Expense Manager</div>
         </div>
 
@@ -99,7 +99,7 @@ export default function Layout() {
         <header className="topbar">
           <button onClick={() => setSidebarOpen(o => !o)} className="mobile-menu-btn"
             style={{ background:'none', border:'none', fontSize:22, cursor:'pointer' }}>☰</button>
-          <div className="topbar-title">ExpenseTrack</div>
+          <div className="topbar-title">ExpenseTracker</div>
           <div className="topbar-actions">
             <div style={{ textAlign:'right' }}>
               <div style={{ fontSize:13, fontWeight:600, color:'var(--navy)' }}>{user?.full_name}</div>

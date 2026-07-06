@@ -4,6 +4,7 @@ import api from '../api/axios';
 import { useAuth } from '../context/AuthContext';
 import { useToast, useDialog } from '../context/UIContext';
 import { formatINR, formatDate, statusLabel } from '../utils/helpers';
+import Pagination from '../components/Pagination';
 
 function StatusBadge({ status }) {
   return <span className={`badge badge-${status}`}>{statusLabel(status)}</span>;
@@ -36,6 +37,8 @@ export default function ExpenseListPage() {
   const [search,       setSearch]       = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [loadError,    setLoadError]    = useState('');  // renamed to avoid conflict
+  const [page,         setPage]         = useState(1);
+  const [pageSize,     setPageSize]     = useState(25);
 
   const load = async () => {
     setLoading(true); setLoadError('');
@@ -81,6 +84,12 @@ export default function ExpenseListPage() {
   };
 
   const displayList = applyFilter(activeTab === 'mine' ? myExp : allExp);
+
+  // Reset to page 1 whenever the active tab or filters change
+  useEffect(() => { setPage(1); }, [activeTab, search, statusFilter]);
+  const pageCount   = Math.max(1, Math.ceil(displayList.length / pageSize));
+  const safePage    = Math.min(page, pageCount);
+  const paginatedList = displayList.slice((safePage - 1) * pageSize, safePage * pageSize);
 
   const allTabHint = {
     coordinator: 'Expenses from your department awaiting your review.',
@@ -192,7 +201,7 @@ export default function ExpenseListPage() {
                 </tr>
               </thead>
               <tbody>
-                {displayList.map(e => (
+                {paginatedList.map(e => (
                   <tr key={e.expense_id}>
                     <td><span style={{ fontFamily:'var(--mono)', fontSize:12, color:'var(--gray-400)' }}>#{e.expense_id}</span></td>
                     {activeTab==='all' && (
@@ -233,10 +242,14 @@ export default function ExpenseListPage() {
             </table>
           </div>
         )}
-        <div style={{ padding:'10px 16px', fontSize:12, color:'var(--gray-400)', borderTop:'1px solid var(--gray-100)', display:'flex', justifyContent:'space-between' }}>
-          <span>Showing {displayList.length} expense{displayList.length!==1?'s':''}</span>
-          {activeTab==='all' && role==='coordinator' && <span>💡 Only your assigned department's expenses</span>}
-        </div>
+        {activeTab==='all' && role==='coordinator' && (
+          <div style={{ padding:'10px 16px', fontSize:12, color:'var(--gray-400)', borderTop:'1px solid var(--gray-100)' }}>
+            💡 Only your assigned department's expenses
+          </div>
+        )}
+        <Pagination page={safePage} pageSize={pageSize} total={displayList.length}
+          onPageChange={setPage} onPageSizeChange={n => { setPageSize(n); setPage(1); }}
+          itemLabel="expenses" />
       </div>
     </div>
   );

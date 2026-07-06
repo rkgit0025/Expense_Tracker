@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import api from '../../api/axios';
 import { useToast, useDialog } from '../../context/UIContext';
+import Pagination from '../../components/Pagination';
 
 const emptyForm = { project_code: '', project_name: '', site_location: '', project_coordinator_hod: '' };
 
@@ -17,6 +18,9 @@ export default function AdminProjects() {
   const [formError,  setFormError]  = useState('');
   const [saving,     setSaving]     = useState(false);
   const [search,     setSearch]     = useState('');
+  // Pagination
+  const [page,     setPage]     = useState(1);
+  const [pageSize, setPageSize] = useState(25);
   // Bulk upload
   const [showBulk,   setShowBulk]   = useState(false);
   const [bulkResult, setBulkResult] = useState(null);
@@ -99,6 +103,12 @@ export default function AdminProjects() {
     return !q || p.project_name?.toLowerCase().includes(q) || p.project_code?.toLowerCase().includes(q);
   });
 
+  // Reset to page 1 whenever the filtered set changes shape (new search, etc.)
+  useEffect(() => { setPage(1); }, [search, projects.length]);
+  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const safePage  = Math.min(page, pageCount);
+  const paginated = filtered.slice((safePage - 1) * pageSize, safePage * pageSize);
+
   return (
     <div>
       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:20, flexWrap:'wrap', gap:10 }}>
@@ -122,7 +132,7 @@ export default function AdminProjects() {
             <table>
               <thead><tr><th>Code</th><th>Project Name</th><th>Site Location</th><th>Coordinator / HOD</th><th>Actions</th></tr></thead>
               <tbody>
-                {filtered.map(p => (
+                {paginated.map(p => (
                   <tr key={p.project_id}>
                     <td><span style={{ fontFamily:'var(--mono)', fontSize:12, fontWeight:600, color:'var(--navy)' }}>{p.project_code}</span></td>
                     <td style={{ fontWeight:500 }}>{p.project_name}</td>
@@ -141,6 +151,9 @@ export default function AdminProjects() {
             </table>
           </div>
         )}
+        <Pagination page={safePage} pageSize={pageSize} total={filtered.length}
+          onPageChange={setPage} onPageSizeChange={n => { setPageSize(n); setPage(1); }}
+          itemLabel="projects" />
       </div>
 
       {/* Edit/Add Modal */}
@@ -202,6 +215,7 @@ export default function AdminProjects() {
                 <ol style={{ margin:'4px 0 0 16px', fontSize:13, lineHeight:1.8 }}>
                   <li>Download the Excel template</li>
                   <li>Fill in project data (one per row)</li>
+                  <li>For Coordinator / HOD, enter the employee's <strong>emp code</strong> — their name is fetched automatically, e.g. <em>Ayush Gupta (A1204)</em></li>
                   <li>Upload the completed file</li>
                 </ol>
               </div>
