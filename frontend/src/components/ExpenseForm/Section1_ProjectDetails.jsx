@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import api from '../../api/axios';
+import SearchableSelect from '../SearchableSelect';
 
 const GENERAL_VISIT_CODE = 'GENERAL';
 
@@ -42,19 +43,17 @@ export default function Section1_ProjectDetails({ data, onChange, readOnly }) {
               value={selected ? `${selected.project_code} – ${selected.project_name}` : (data.project_id || '—')}
             />
           ) : (
-            <select
-              className="form-select"
+            <SearchableSelect
+              options={projects.map(p => ({
+                value: p.project_id,
+                label: `${p.project_code} – ${p.project_name}`,
+              }))}
               value={data.project_id || ''}
-              onChange={e => handleProjectChange(e.target.value)}
-              required
-            >
-              <option value="">— Select Project —</option>
-              {projects.map(p => (
-                <option key={p.project_id} value={p.project_id}>
-                  {p.project_code} – {p.project_name}
-                </option>
-              ))}
-            </select>
+              onChange={handleProjectChange}
+              placeholder="— Select Project —"
+              emptyOptionLabel="— Select Project —"
+              searchPlaceholder="Search by project code or name..."
+            />
           )}
         </div>
 

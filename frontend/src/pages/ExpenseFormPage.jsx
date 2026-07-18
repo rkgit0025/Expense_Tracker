@@ -109,6 +109,25 @@ export default function ExpenseFormPage() {
   const handleSubmit = async () => {
     if (!expenseId) { setFormError('Please save the expense first.'); return; }
 
+    // ── Zero-amount validation ────────────────────────────────────────────────
+    // Block submission if the total claim amount is ₹0 (same calculation as
+    // TotalSummary). Shown via the in-app alert banner + toast, never window.alert.
+    const sumDA   = [...journey, ...returns, ...stay].reduce((s, r) => s + (parseFloat(r.total_amount) || 0), 0);
+    const sumTrv  = travel.reduce((s, r) => s + (parseFloat(r.total_amount ?? r.amount) || 0), 0);
+    const sumFd   = food.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
+    const sumHt   = hotel.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
+    const sumMisc = misc.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
+    const totalClaimAmount = sumDA + sumTrv + sumFd + sumHt + sumMisc;
+
+    if (totalClaimAmount <= 0) {
+      const msg = 'Total claim amount is ₹0. Please add at least one expense entry with a valid amount before submitting.';
+      setFormError(msg);
+      toastError(msg);
+      setStep(7); // jump to Summary so the user can see the ₹0 breakdown
+      return;
+    }
+    // ───────────────────────────────────────────────────────────────────────────
+
     // ── Receipt validation ──────────────────────────────────────────────────
     // If a section has data, at least one receipt must be uploaded for it.
     const receiptsByCategory = (cat) => receipts.filter(r => r.category === cat);
