@@ -233,8 +233,15 @@ router.post('/', auth, async (req, res) => {
     const returnsToUse = isSingleDayTravel ? [] : returns;
 
     const sumArr = (arr, key) => (arr || []).reduce((s, r) => s + (parseFloat(r[key]) || 0), 0);
+    // Travel entries carry two amount fields — `amount` (the rate typed in) and
+    // `total_amount` (a computed field). A row loaded from an existing draft that
+    // wasn't re-touched in this save can have total_amount empty while amount is
+    // still set — fall back to amount here too, matching insertTravel() below and
+    // the on-screen Total Claim Summary, so claim_amount never silently drops a
+    // travel entry's value.
+    const sumTravel = (arr) => (arr || []).reduce((s, r) => s + (parseFloat(r.total_amount ?? r.amount) || 0), 0);
     const totalClaim = sumArr(journey,'total_amount') + sumArr(returnsToUse,'total_amount') +
-                       sumArr(stay,'total_amount')    + sumArr(travel,'total_amount') +
+                       sumArr(stay,'total_amount')    + sumTravel(travel) +
                        sumArr(food,'amount')          + sumArr(hotel,'amount') + sumArr(misc,'amount');
 
     // Save override fields only if the columns exist in expense_form
@@ -304,8 +311,10 @@ router.put('/:id', auth, async (req, res) => {
     const returnsToUse = isSingleDayTravel ? [] : returns;
 
     const sumArr = (arr, key) => (arr || []).reduce((s, r) => s + (parseFloat(r[key]) || 0), 0);
+    // See matching comment in the POST route above — same amount fallback needed here.
+    const sumTravel = (arr) => (arr || []).reduce((s, r) => s + (parseFloat(r.total_amount ?? r.amount) || 0), 0);
     const totalClaim = sumArr(journey,'total_amount') + sumArr(returnsToUse,'total_amount') +
-                       sumArr(stay,'total_amount')    + sumArr(travel,'total_amount') +
+                       sumArr(stay,'total_amount')    + sumTravel(travel) +
                        sumArr(food,'amount')          + sumArr(hotel,'amount') + sumArr(misc,'amount');
 
     // Save override fields only if the columns exist

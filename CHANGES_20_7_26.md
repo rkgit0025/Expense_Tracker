@@ -1,5 +1,36 @@
 # Changes — 20 July 2026 update
 
+## Update — 21 July 2026 (claim_amount under-counting travel entries)
+
+Fixed the bug diagnosed in the previous session: the stored `claim_amount` (what the Expenses
+list's Amount column shows) could silently exclude a travel entry's value, while the expense's own
+detail/view page correctly included it — e.g. a real case showed 5,898 on the list vs. 7,098 on
+the detail view, a gap of exactly the travel amount.
+
+**Root cause:** travel entries carry two amount fields — `amount` (the rate typed in) and
+`total_amount` (a computed field, added by a later migration). The `claim_amount` calculation in
+`backend/routes/expenses.js` summed `total_amount` only, with no fallback. Every other place that
+computes a travel total — the database insert logic (`insertTravel()`) and the on-screen Total
+Claim Summary — already falls back to `amount` when `total_amount` is empty. `claim_amount` was
+the one place that didn't, so a travel row whose `total_amount` hadn't been (re)computed in the
+save that last touched it (e.g. a row loaded from an existing draft and not re-edited before
+resubmitting) would correctly show its amount everywhere except in this one stored total.
+
+**Fix:** added the same fallback (`total_amount ?? amount`) to the `claim_amount` calculation, in
+both the create (`POST /`) and update (`PUT /:id`) routes — the two places this total is computed.
+Verified two ways before shipping: a direct calculation test reproducing the exact reported numbers
+(confirmed the old formula gives 5,898, the new one gives 7,098), and a full real HTTP
+create-expense test through the actual server with a travel entry missing `total_amount` — the
+saved `claim_amount` came back correctly as 7,098.00.
+
+**Note on already-affected expenses:** this fixes the calculation for anything created or edited
+going forward. It does **not** retroactively correct `claim_amount` on expenses already saved with
+the old, under-counted total (like the one that surfaced this bug) — those would need either a
+resave (open and save the expense again, which will now recompute it correctly) or a one-off data
+correction script if there are many of them. Let me know if you want that.
+
+---
+
 ## Update — 20 July 2026 (fifth follow-up: same-day duplicate entries in Single-Day Travel)
 
 Investigated the report of a DEL→CDG / CDG→DEL same-day round trip (two entries in "DA for
