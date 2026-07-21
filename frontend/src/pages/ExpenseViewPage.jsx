@@ -205,7 +205,12 @@ export default function ExpenseViewPage() {
       </div>
 
       {/* DA tables */}
-      {([['Travel Journey', journey], ['Return Journey', returns], ['Stay Details', stay]]).map(([title, rows]) =>
+      {form.is_single_day_travel === 1 && (
+        <div className="alert alert-info" style={{ marginBottom: 12 }}>
+          ℹ️ This claim is marked as <strong>Single-Day Travel</strong> — Return Journey DA does not apply.
+        </div>
+      )}
+      {([['DA for Travel Days', journey], ['Return Journey', returns], ['DA for Stay Days (Site Allowance)', stay]]).map(([title, rows]) =>
         rows?.length > 0 && (
           <div className="card" key={title}>
             <div className="card-header">
@@ -214,12 +219,14 @@ export default function ExpenseViewPage() {
             </div>
             <div className="table-wrap">
               <table>
-                <thead><tr><th>From</th><th>To</th><th>Scope</th><th>Days</th><th>Rate/Day</th><th style={{ textAlign: 'right' }}>Total</th></tr></thead>
+                <thead><tr><th>From</th><th>To</th><th>From Location</th><th>To Location</th><th>Scope</th><th>Days</th><th>Rate/Day</th><th style={{ textAlign: 'right' }}>Total</th></tr></thead>
                 <tbody>
                   {rows.map((r, i) => (
                     <tr key={i}>
                       <td>{formatDate(r.from_date)}</td>
                       <td>{formatDate(r.to_date)}</td>
+                      <td>{r.from_location || '—'}</td>
+                      <td>{r.to_location || '—'}</td>
                       <td>{r.scope}</td>
                       <td>{r.no_of_days}</td>
                       <td>{formatINR(r.amount_per_day)}</td>

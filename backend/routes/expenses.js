@@ -2,6 +2,7 @@ const express = require('express');
 const router  = express.Router();
 const path    = require('path');
 const fs      = require('fs');
+const archiver = require('archiver');
 const PDFDocument = require('pdfkit');
 const db      = require('../config/db');
 const { sendExpenseSubmissionEmail, sendExpenseActionEmail } = require('../config/mailer');
@@ -225,8 +226,14 @@ router.post('/', auth, async (req, res) => {
             journey, returns, stay, travel, food, hotel, misc } = req.body;
     if (!project_id) return res.status(400).json({ message: 'Project is required.' });
 
+    // Single-day travel: return journey is not applicable (would double-count DA
+    // for a trip that starts and ends the same day), so ignore any return rows
+    // server-side too, regardless of what the client sent.
+    const isSingleDayTravel = !!req.body.is_single_day_travel;
+    const returnsToUse = isSingleDayTravel ? [] : returns;
+
     const sumArr = (arr, key) => (arr || []).reduce((s, r) => s + (parseFloat(r[key]) || 0), 0);
-    const totalClaim = sumArr(journey,'total_amount') + sumArr(returns,'total_amount') +
+    const totalClaim = sumArr(journey,'total_amount') + sumArr(returnsToUse,'total_amount') +
                        sumArr(stay,'total_amount')    + sumArr(travel,'total_amount') +
                        sumArr(food,'amount')          + sumArr(hotel,'amount') + sumArr(misc,'amount');
 
@@ -238,9 +245,13 @@ router.post('/', auth, async (req, res) => {
     const efColNamesPost = efColsPost.map(c => c.COLUMN_NAME);
     const hasSiteOvPost  = efColNamesPost.includes('site_location_override');
     const hasCoordOvPost = efColNamesPost.includes('project_coordinator_hod_override');
+    const hasSingleDayPost = efColNamesPost.includes('is_single_day_travel');
 
     let insertSQL, insertParams;
-    if (hasSiteOvPost && hasCoordOvPost) {
+    if (hasSiteOvPost && hasCoordOvPost && hasSingleDayPost) {
+      insertSQL = `INSERT INTO expense_form (emp_id,project_id,claim_amount,status,site_location_override,project_coordinator_hod_override,is_single_day_travel) VALUES (?,?,?,'draft',?,?,?)`;
+      insertParams = [req.user.emp_id, project_id, totalClaim, site_location_override || null, project_coordinator_hod_override || null, isSingleDayTravel ? 1 : 0];
+    } else if (hasSiteOvPost && hasCoordOvPost) {
       insertSQL = `INSERT INTO expense_form (emp_id,project_id,claim_amount,status,site_location_override,project_coordinator_hod_override) VALUES (?,?,?,'draft',?,?)`;
       insertParams = [req.user.emp_id, project_id, totalClaim, site_location_override || null, project_coordinator_hod_override || null];
     } else {
@@ -251,7 +262,7 @@ router.post('/', auth, async (req, res) => {
     const expenseId = result.insertId;
 
     await insertAllowances(conn, expenseId, req.user.emp_id, 'journey_allowance', journey);
-    await insertAllowances(conn, expenseId, req.user.emp_id, 'return_allowance',  returns);
+    await insertAllowances(conn, expenseId, req.user.emp_id, 'return_allowance',  returnsToUse);
     await insertAllowances(conn, expenseId, req.user.emp_id, 'stay_allowance',    stay);
     await insertTravel(conn, expenseId, travel);
     await insertFood  (conn, expenseId, food);
@@ -286,8 +297,14 @@ router.put('/:id', auth, async (req, res) => {
 
     const { project_id, site_location_override, project_coordinator_hod_override,
             journey, returns, stay, travel, food, hotel, misc } = req.body;
+
+    // Single-day travel: ignore any return-journey rows server-side too, so
+    // DA can never be double-counted for a same-day trip.
+    const isSingleDayTravel = !!req.body.is_single_day_travel;
+    const returnsToUse = isSingleDayTravel ? [] : returns;
+
     const sumArr = (arr, key) => (arr || []).reduce((s, r) => s + (parseFloat(r[key]) || 0), 0);
-    const totalClaim = sumArr(journey,'total_amount') + sumArr(returns,'total_amount') +
+    const totalClaim = sumArr(journey,'total_amount') + sumArr(returnsToUse,'total_amount') +
                        sumArr(stay,'total_amount')    + sumArr(travel,'total_amount') +
                        sumArr(food,'amount')          + sumArr(hotel,'amount') + sumArr(misc,'amount');
 
@@ -299,8 +316,14 @@ router.put('/:id', auth, async (req, res) => {
     const efColNamesPut = efColsPut.map(c => c.COLUMN_NAME);
     const hasSiteOvPut  = efColNamesPut.includes('site_location_override');
     const hasCoordOvPut = efColNamesPut.includes('project_coordinator_hod_override');
+    const hasSingleDayPut = efColNamesPut.includes('is_single_day_travel');
 
-    if (hasSiteOvPut && hasCoordOvPut) {
+    if (hasSiteOvPut && hasCoordOvPut && hasSingleDayPut) {
+      await conn.query(
+        'UPDATE expense_form SET project_id=?,claim_amount=?,site_location_override=?,project_coordinator_hod_override=?,is_single_day_travel=? WHERE expense_id=?',
+        [project_id, totalClaim, site_location_override || null, project_coordinator_hod_override || null, isSingleDayTravel ? 1 : 0, expenseId]
+      );
+    } else if (hasSiteOvPut && hasCoordOvPut) {
       await conn.query(
         'UPDATE expense_form SET project_id=?,claim_amount=?,site_location_override=?,project_coordinator_hod_override=? WHERE expense_id=?',
         [project_id, totalClaim, site_location_override || null, project_coordinator_hod_override || null, expenseId]
@@ -315,7 +338,7 @@ router.put('/:id', auth, async (req, res) => {
       await conn.query(`DELETE FROM ${tbl} WHERE expense_id=?`, [expenseId]);
 
     await insertAllowances(conn, expenseId, req.user.emp_id, 'journey_allowance', journey);
-    await insertAllowances(conn, expenseId, req.user.emp_id, 'return_allowance',  returns);
+    await insertAllowances(conn, expenseId, req.user.emp_id, 'return_allowance',  returnsToUse);
     await insertAllowances(conn, expenseId, req.user.emp_id, 'stay_allowance',    stay);
     await insertTravel(conn, expenseId, travel);
     await insertFood  (conn, expenseId, food);
@@ -358,6 +381,36 @@ router.post('/:id/submit', auth, async (req, res) => {
       );
       await logHistory(db, expenseId, req.user.emp_id, 'submitted', form.status, 'coordinator_approved',
         'Submitted by coordinator/senior role — sent directly to HR.');
+
+      // ── Email all active HR users — this expense skipped straight to HR ──────
+      try {
+        const [hrUsers] = await db.query(
+          `SELECT u.email FROM users u WHERE u.role='hr' AND u.status='active'`
+        );
+        const hrEmails = hrUsers.map(u => u.email).filter(Boolean);
+        if (hrEmails.length > 0) {
+          const [[submitterEmp]] = await db.query(
+            `SELECT e.full_name, p.project_name, ef.claim_amount
+             FROM employees e
+             JOIN expense_form ef ON ef.expense_id = ?
+             JOIN projects p ON ef.project_id = p.project_id
+             WHERE e.emp_id = ?`,
+            [expenseId, req.user.emp_id]
+          );
+          const loginUrl = `${process.env.CLIENT_URL || 'http://localhost:5173'}/expenses/${expenseId}`;
+          await sendExpenseSubmissionEmail({
+            coordinatorEmails: hrEmails,
+            submitterName:     submitterEmp?.full_name,
+            expenseId,
+            projectName:       submitterEmp?.project_name,
+            claimAmount:       submitterEmp?.claim_amount,
+            loginUrl,
+          });
+        }
+      } catch (mailErr) {
+        console.warn('HR notification email failed (non-fatal):', mailErr.message);
+      }
+      // ─────────────────────────────────────────────────────────────────────────
 
       await logAudit(db, req, 'expense_submitted', 'expense', expenseId,
         `Expense #${expenseId}`, `Expense #${expenseId} submitted (senior role — coordinator stage skipped, sent to HR)`);
@@ -485,6 +538,44 @@ router.post('/:id/approve', auth, async (req, res) => {
     } catch (mailErr) {
       console.warn('Approval notification email failed (non-fatal):', mailErr.message);
     }
+
+    // ── Notify next-stage reviewers by email (non-fatal) ──────────────────
+    // e.g. when a coordinator approves, HR needs to know a new item is
+    // waiting for them; when HR approves, Accounts needs to know.
+    try {
+      let nextRole = null;
+      if (newStatus === 'coordinator_approved') nextRole = 'hr';
+      else if (newStatus === 'hr_approved')      nextRole = 'accounts';
+
+      if (nextRole) {
+        const [nextUsers] = await db.query(
+          `SELECT u.email FROM users u WHERE u.role=? AND u.status='active'`, [nextRole]
+        );
+        const nextEmails = nextUsers.map(u => u.email).filter(Boolean);
+        if (nextEmails.length > 0) {
+          const [[submitterEmp]] = await db.query(
+            `SELECT e.full_name, p.project_name, ef.claim_amount
+             FROM expense_form ef
+             JOIN employees e ON ef.emp_id = e.emp_id
+             JOIN projects p ON ef.project_id = p.project_id
+             WHERE ef.expense_id = ?`,
+            [expenseId]
+          );
+          const loginUrl = `${process.env.CLIENT_URL || 'http://localhost:5173'}/expenses/${expenseId}`;
+          await sendExpenseSubmissionEmail({
+            coordinatorEmails: nextEmails,
+            submitterName:     submitterEmp?.full_name,
+            expenseId,
+            projectName:       submitterEmp?.project_name,
+            claimAmount:       submitterEmp?.claim_amount,
+            loginUrl,
+          });
+        }
+      }
+    } catch (mailErr) {
+      console.warn('Next-stage reviewer notification email failed (non-fatal):', mailErr.message);
+    }
+    // ─────────────────────────────────────────────────────────────────────────
 
     await logAudit(db, req, 'expense_approved', 'expense', expenseId, `Expense #${expenseId}`, `Expense #${expenseId} approved by ${req.user.role} — new status: ${newStatus}`);
     res.json({ message: 'Expense approved.', new_status: newStatus });
@@ -617,6 +708,75 @@ router.delete('/:id/receipts/:receiptId', auth, async (req, res) => {
   }
 });
 
+// ── GET /api/expenses/:id/receipts/download-all — zip every attachment ───────
+router.get('/:id/receipts/download-all', auth, async (req, res) => {
+  try {
+    const expenseId = req.params.id;
+    const [[form]] = await db.query(
+      `SELECT ef.emp_id, e.department_id FROM expense_form ef
+       JOIN employees e ON ef.emp_id = e.emp_id
+       WHERE ef.expense_id = ?`,
+      [expenseId]
+    );
+    if (!form) return res.status(404).json({ message: 'Expense not found.' });
+
+    // Same visibility rules as GET /:id
+    const role  = req.user.role;
+    const empId = req.user.emp_id;
+    if (role === 'employee' && form.emp_id !== empId)
+      return res.status(403).json({ message: 'Access denied.' });
+    if (role === 'coordinator') {
+      const [depts] = await db.query(
+        'SELECT department_id FROM coordinator_departments WHERE coordinator_emp_id=?', [empId]
+      );
+      const deptIds = depts.map(d => d.department_id);
+      if (form.emp_id !== empId && !deptIds.includes(form.department_id))
+        return res.status(403).json({ message: 'Access denied. Not your department.' });
+    }
+
+    const [receipts] = await db.query('SELECT * FROM expense_receipts WHERE expense_id=?', [expenseId]);
+    if (!receipts.length) return res.status(404).json({ message: 'No attachments to download.' });
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="expense_${expenseId}_attachments.zip"`);
+
+    const archive = archiver('zip', { zlib: { level: 9 } });
+    archive.on('error', (err) => {
+      console.error('Zip build error:', err);
+      if (!res.headersSent) res.status(500).json({ message: 'Failed to build zip.' });
+      else res.end();
+    });
+    archive.pipe(res);
+
+    // Group by category inside the zip, and de-duplicate filenames so
+    // nothing silently overwrites another file with the same original name.
+    const usedNames = new Set();
+    for (const r of receipts) {
+      const fp = path.join(__dirname, '../uploads', r.file_path);
+      if (!fs.existsSync(fp)) continue;
+      const displayName = r.original_name || r.file_path;
+      let zipPath = `${r.category}/${displayName}`;
+      let n = 1;
+      while (usedNames.has(zipPath)) {
+        const ext  = path.extname(displayName);
+        const base = path.basename(displayName, ext);
+        zipPath = `${r.category}/${base} (${n})${ext}`;
+        n++;
+      }
+      usedNames.add(zipPath);
+      archive.file(fp, { name: zipPath });
+    }
+
+    await archive.finalize();
+
+    await logAudit(db, req, 'attachments_downloaded', 'expense', expenseId,
+      `Expense #${expenseId}`, `All attachments (${receipts.length} files) downloaded as ZIP for expense #${expenseId}`);
+  } catch (err) {
+    console.error(err);
+    if (!res.headersSent) res.status(500).json({ message: 'Server error.' });
+  }
+});
+
 router.delete('/:id', auth, async (req, res) => {
   try {
     const [[form]] = await db.query('SELECT emp_id,status FROM expense_form WHERE expense_id=?', [req.params.id]);
@@ -662,10 +822,31 @@ function toDate(val) {
 
 async function insertAllowances(conn, expenseId, empId, table, rows) {
   if (!rows?.length) return;
-  await conn.query(
-    `INSERT INTO ${table} (expense_id,emp_id,from_date,to_date,scope,no_of_days,amount_per_day,total_amount) VALUES ?`,
-    [rows.map(r => [expenseId, empId, toDate(r.from_date), toDate(r.to_date), r.scope, r.no_of_days||0, r.amount_per_day||0, r.total_amount||0])]
+  // Detect whether the location columns exist (added by migration) so this
+  // keeps working even if the migration hasn't been run yet.
+  const [cols] = await conn.query(
+    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`,
+    [table]
   );
+  const colNames = cols.map(c => c.COLUMN_NAME);
+  const hasLocations = colNames.includes('from_location') && colNames.includes('to_location');
+
+  if (hasLocations) {
+    await conn.query(
+      `INSERT INTO ${table} (expense_id,emp_id,from_date,to_date,from_location,to_location,scope,no_of_days,amount_per_day,total_amount) VALUES ?`,
+      [rows.map(r => [
+        expenseId, empId, toDate(r.from_date), toDate(r.to_date),
+        r.from_location || null, r.to_location || null,
+        r.scope, r.no_of_days||0, r.amount_per_day||0, r.total_amount||0,
+      ])]
+    );
+  } else {
+    await conn.query(
+      `INSERT INTO ${table} (expense_id,emp_id,from_date,to_date,scope,no_of_days,amount_per_day,total_amount) VALUES ?`,
+      [rows.map(r => [expenseId, empId, toDate(r.from_date), toDate(r.to_date), r.scope, r.no_of_days||0, r.amount_per_day||0, r.total_amount||0])]
+    );
+  }
 }
 async function insertTravel(conn, expenseId, rows) {
   if (!rows?.length) return;
@@ -845,19 +1026,32 @@ router.get('/:id/pdf', auth, async (req, res) => {
     y += 4;
 
     // ── 2. Daily Allowance ──
-    const daSections = [['Travel Journey', journey], ['Return Journey', returns], ['Stay Details', stay]];
+    const daSections = [
+      ['DA for Travel Days', journey],
+      ['Return Journey', returns],
+      ['DA for Stay Days (Site Allowance)', stay],
+    ];
     let daTotal = 0;
+    if (form.is_single_day_travel) {
+      doc.fillColor('#92400e').fontSize(8).font('Helvetica-Oblique')
+        .text('Single-Day Travel', 44, y);
+      y += 14;
+    }
     daSections.forEach(([title, rows]) => {
       if (!rows || !rows.length) return;
       section(`Daily Allowance — ${title}`, '2');
       const cols = [
-        { label: 'From Date', w: 80 }, { label: 'To Date', w: 80 },
-        { label: 'Scope', w: 130 }, { label: 'Days', w: 40, align: 'right' },
-        { label: 'Rate/Day', w: 80, align: 'right' }, { label: 'Total', w: 85, align: 'right' }
+        { label: 'From Date', w: 55 }, { label: 'To Date', w: 55 },
+        { label: 'From Loc.', w: 72 }, { label: 'To Loc.', w: 72 },
+        { label: 'Scope', w: 88 }, { label: 'Days', w: 28, align: 'right' },
+        { label: 'Rate/Day', w: 65, align: 'right' }, { label: 'Total', w: 80, align: 'right' }
       ];
       tableHeader(cols);
       rows.forEach((r, i) => {
-        tableRow(cols, [fmtDate(r.from_date), fmtDate(r.to_date), r.scope, r.no_of_days, INR(r.amount_per_day), INR(r.total_amount)], i % 2 === 0);
+        tableRow(cols, [
+          fmtDate(r.from_date), fmtDate(r.to_date), r.from_location, r.to_location,
+          r.scope, r.no_of_days, INR(r.amount_per_day), INR(r.total_amount)
+        ], i % 2 === 0);
         daTotal += parseFloat(r.total_amount || 0);
       });
       y += 4;

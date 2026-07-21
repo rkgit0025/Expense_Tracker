@@ -60,9 +60,33 @@ export default function Section7_Receipts({
 }) {
   const [uploading, setUploading] = useState({});
   const [errors,    setErrors]    = useState({});
+  const [downloadingAll, setDownloadingAll] = useState(false);
   const fileRefs = useRef({});
 
   const byCategory = (cat) => receipts.filter(r => r.category === cat);
+
+  const handleDownloadAll = async () => {
+    if (!expenseId || !receipts.length) return;
+    setDownloadingAll(true);
+    try {
+      const token = localStorage.getItem('token');
+      const resp  = await fetch(`/api/expenses/${expenseId}/receipts/download-all`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (!resp.ok) return;
+      const blob = await resp.blob();
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href     = url;
+      a.download = `expense_${expenseId}_attachments.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      /* silent — best-effort convenience action */
+    } finally {
+      setDownloadingAll(false);
+    }
+  };
 
   const handleUpload = async (cat, files) => {
     if (!expenseId) {
@@ -126,6 +150,17 @@ export default function Section7_Receipts({
         <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--gray-400)' }}>
           Max {MAX_FILES} files per category · {MAX_SIZE_MB} MB each · JPG, PNG, PDF
         </span>
+        {receipts.length > 0 && (
+          <button
+            className="btn btn-ghost btn-sm"
+            style={{ marginLeft: 12, flexShrink: 0 }}
+            onClick={handleDownloadAll}
+            disabled={downloadingAll}
+            title="Download every attachment on this expense as one ZIP file"
+          >
+            {downloadingAll ? '⏳ Zipping…' : '⬇️ Download All'}
+          </button>
+        )}
       </div>
 
       {!expenseId && !readOnly && (

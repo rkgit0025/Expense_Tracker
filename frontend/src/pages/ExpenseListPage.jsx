@@ -36,6 +36,7 @@ export default function ExpenseListPage() {
   const [loading,      setLoading]      = useState(true);
   const [search,       setSearch]       = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [deptFilter,   setDeptFilter]   = useState('');
   const [loadError,    setLoadError]    = useState('');  // renamed to avoid conflict
   const [page,         setPage]         = useState(1);
   const [pageSize,     setPageSize]     = useState(25);
@@ -80,13 +81,19 @@ export default function ExpenseListPage() {
       );
     }
     if (statusFilter) out = out.filter(e => e.status === statusFilter);
+    if (deptFilter)   out = out.filter(e => e.department_name === deptFilter);
     return out;
   };
 
   const displayList = applyFilter(activeTab === 'mine' ? myExp : allExp);
 
+  // Departments present in the "All Expenses" list — for coordinators this is
+  // naturally just their own assigned department, since the backend already
+  // restricts what they can see.
+  const departmentOptions = [...new Set(allExp.map(e => e.department_name).filter(Boolean))].sort();
+
   // Reset to page 1 whenever the active tab or filters change
-  useEffect(() => { setPage(1); }, [activeTab, search, statusFilter]);
+  useEffect(() => { setPage(1); }, [activeTab, search, statusFilter, deptFilter]);
   const pageCount   = Math.max(1, Math.ceil(displayList.length / pageSize));
   const safePage    = Math.min(page, pageCount);
   const paginatedList = displayList.slice((safePage - 1) * pageSize, safePage * pageSize);
@@ -137,7 +144,7 @@ export default function ExpenseListPage() {
       <div style={{ display:'flex', gap:4, marginBottom:20, borderBottom:'2px solid var(--gray-100)' }}>
         {['mine', ...(showAllTab ? ['all'] : [])].map(tab => (
           <button key={tab}
-            onClick={() => { setActiveTab(tab); setSearch(''); setStatusFilter(''); }}
+            onClick={() => { setActiveTab(tab); setSearch(''); setStatusFilter(''); setDeptFilter(''); }}
             style={{
               padding:'10px 20px', border:'none', cursor:'pointer', background:'transparent',
               fontFamily:'var(--font)', fontSize:14,
@@ -164,7 +171,7 @@ export default function ExpenseListPage() {
 
       {/* Filters */}
       <div className="card" style={{ padding:12, marginBottom:12 }}>
-        <div className="grid-2">
+        <div className={activeTab === 'all' ? 'grid-3' : 'grid-2'}>
           <input className="form-control"
             placeholder={activeTab==='mine' ? '🔍 Search by project, ID…' : '🔍 Search by employee, project…'}
             value={search} onChange={e => setSearch(e.target.value)} />
@@ -172,6 +179,12 @@ export default function ExpenseListPage() {
             <option value="">All Statuses</option>
             {ALL_STATUSES.map(s => <option key={s} value={s}>{statusLabel(s)}</option>)}
           </select>
+          {activeTab === 'all' && (
+            <select className="form-select" value={deptFilter} onChange={e => setDeptFilter(e.target.value)}>
+              <option value="">All Departments</option>
+              {departmentOptions.map(d => <option key={d} value={d}>{d}</option>)}
+            </select>
+          )}
         </div>
       </div>
 

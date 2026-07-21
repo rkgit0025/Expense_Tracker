@@ -16,6 +16,7 @@ import AdminProjects     from './pages/Admin/AdminProjects';
 import AdminRates        from './pages/Admin/AdminRates';
 import AdminMasterData   from './pages/Admin/AdminMasterData';
 import AdminAuditLogs    from './pages/Admin/AdminAuditLogs';
+import AdminBackup       from './pages/Admin/AdminBackup';
 import ProfilePage       from './pages/ProfilePage';
 
 function PrivateRoute({ children, roles }) {
@@ -57,6 +58,8 @@ function AppRoutes() {
           element={<PrivateRoute roles={['admin','hr']}><AdminMasterData /></PrivateRoute>} />
         <Route path="admin/audit-logs"
           element={<PrivateRoute roles={['admin']}><AdminAuditLogs /></PrivateRoute>} />
+        <Route path="admin/backup"
+          element={<PrivateRoute roles={['admin']}><AdminBackup /></PrivateRoute>} />
         <Route path="profile" element={<ProfilePage />} />
       </Route>
 

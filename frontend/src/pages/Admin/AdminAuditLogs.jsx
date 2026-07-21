@@ -14,6 +14,7 @@ const ACTION_OPTIONS = [
   { value: 'expense_submitted',   label: '📤 Expense Submitted' },
   { value: 'expense_approved',    label: '✅ Expense Approved' },
   { value: 'expense_rejected',    label: '❌ Expense Rejected' },
+  { value: 'attachments_downloaded', label: '⬇️ Attachments Downloaded' },
   // Employees
   { value: 'employee_created',    label: '👤 Employee Created' },
   { value: 'employee_updated',    label: '✏️ Employee Updated' },
@@ -37,6 +38,8 @@ const ACTION_OPTIONS = [
   { value: 'department_deleted',  label: '🗑️ Department Deleted' },
   { value: 'designation_deleted', label: '🗑️ Designation Deleted' },
   { value: 'location_deleted',    label: '🗑️ Location Deleted' },
+  // System
+  { value: 'database_backup',     label: '🗄️ Database Backup Downloaded' },
 ];
 
 const ENTITY_OPTIONS = [
@@ -48,6 +51,7 @@ const ENTITY_OPTIONS = [
   { value: 'department', label: '🏢 Department' },
   { value: 'designation',label: '🎖️ Designation' },
   { value: 'location',   label: '📍 Location' },
+  { value: 'database',   label: '🗄️ Database' },
 ];
 
 const ACTION_COLORS = {
@@ -78,6 +82,8 @@ const ACTION_COLORS = {
   department_deleted:   { bg:'#fee2e2', color:'#991b1b' },
   designation_deleted:  { bg:'#fee2e2', color:'#991b1b' },
   location_deleted:     { bg:'#fee2e2', color:'#991b1b' },
+  attachments_downloaded: { bg:'#dbeafe', color:'#1e40af' },
+  database_backup:      { bg:'#e0e7ff', color:'#3730a3' },
 };
 
 const ACTION_ICON = {
@@ -108,6 +114,8 @@ const ACTION_ICON = {
   department_deleted:   '🗑️',
   designation_deleted:  '🗑️',
   location_deleted:     '🗑️',
+  attachments_downloaded: '⬇️',
+  database_backup:      '🗄️',
 };
 
 const ROLE_COLORS = {

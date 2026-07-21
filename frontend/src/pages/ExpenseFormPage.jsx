@@ -12,7 +12,7 @@ import Section6_MiscExpenses    from '../components/ExpenseForm/Section6_MiscExp
 import Section7_Receipts        from '../components/ExpenseForm/Section7_Receipts';
 import TotalSummary             from '../components/ExpenseForm/TotalSummary';
 
-const emptyDA    = () => ({ from_date: '', to_date: '', scope: 'DA-Metro', no_of_days: 0, amount_per_day: 0, total_amount: 0 });
+const emptyDA    = () => ({ from_date: '', to_date: '', from_location: '', to_location: '', scope: 'DA-Metro', no_of_days: 0, amount_per_day: 0, total_amount: 0 });
 const emptyTravel= () => ({ from_date: '', to_date: '', from_location: '', to_location: '', mode_of_travel: 'Taxi', amount: '', no_of_days: 0, total_amount: 0 });
 const emptyFood  = () => ({ from_date: '', to_date: '', sharing: 1, location: '', amount: '' });
 const emptyHotel = () => ({ from_date: '', to_date: '', sharing: 1, location: '', amount: '' });
@@ -47,6 +47,7 @@ export default function ExpenseFormPage() {
   const [journey,   setJourney]   = useState([emptyDA()]);
   const [returns,   setReturns]   = useState([emptyDA()]);
   const [stay,      setStay]      = useState([emptyDA()]);
+  const [isSingleDayTravel, setIsSingleDayTravel] = useState(false);
   const [travel,    setTravel]    = useState([emptyTravel()]);
   const [food,      setFood]      = useState([emptyFood()]);
   const [hotel,     setHotel]     = useState([emptyHotel()]);
@@ -62,6 +63,7 @@ export default function ExpenseFormPage() {
       setSiteLocation(form.site_location_override || '');
       setCoordHod(form.project_coordinator_hod_override || '');
       setStatus(form.status);
+      setIsSingleDayTravel(!!form.is_single_day_travel);
       setJourney(j?.length ? j : [emptyDA()]);
       setReturns(r?.length ? r : [emptyDA()]);
       setStay   (s?.length ? s : [emptyDA()]);
@@ -77,6 +79,7 @@ export default function ExpenseFormPage() {
     project_id: projectId,
     site_location_override:          siteLocation || undefined,
     project_coordinator_hod_override: coordHod    || undefined,
+    is_single_day_travel: isSingleDayTravel,
     journey:  journey.filter(r => r.from_date),
     returns:  returns.filter(r => r.from_date),
     stay:     stay.filter(r => r.from_date),
@@ -198,6 +201,7 @@ export default function ExpenseFormPage() {
     <Section2_DailyAllowance key={1}
       journey={journey} returns={returns} stay={stay}
       onJourney={setJourney} onReturns={setReturns} onStay={setStay}
+      isSingleDayTravel={isSingleDayTravel} onIsSingleDayTravelChange={setIsSingleDayTravel}
       readOnly={readOnly}
     />,
     <Section3_TravelEntries key={2} rows={travel} onChange={setTravel} readOnly={readOnly} />,
