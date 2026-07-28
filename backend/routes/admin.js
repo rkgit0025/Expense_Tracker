@@ -8,6 +8,7 @@ const db      = require('../config/db');
 const auth    = require('../middleware/auth');
 const { authorize } = require('../middleware/auth');
 const { logAudit }  = require('../config/audit');
+const { computeClaimTotal } = require('../config/claimCalc');
 
 const adminOnly = authorize('admin');
 const adminOrHR = authorize('admin', 'hr');
@@ -884,6 +885,104 @@ router.get('/backup-database', auth, adminOnly, async (req, res) => {
       res.write(`\n-- ERROR: backup interrupted: ${err.message}\n`);
       res.end();
     }
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// CLAIM TOTAL RECALCULATION — admin only
+// Finds (and optionally fixes) expenses whose stored claim_amount doesn't
+// match what their actual line items add up to today. A now-fixed bug in
+// that calculation could leave older records with an under-counted
+// claim_amount that never self-corrects — this tool finds and repairs them.
+// Read-only check first, explicit list of IDs required to actually write,
+// so nothing gets changed without a human reviewing it first.
+// ═══════════════════════════════════════════════════════════════
+async function fetchExpenseLineItems(expenseId) {
+  const [[journey], [returns], [stay], [travel], [food], [hotel], [misc]] = await Promise.all([
+    db.query('SELECT * FROM journey_allowance WHERE expense_id=?', [expenseId]),
+    db.query('SELECT * FROM return_allowance  WHERE expense_id=?', [expenseId]),
+    db.query('SELECT * FROM stay_allowance    WHERE expense_id=?', [expenseId]),
+    db.query('SELECT * FROM travel_entries    WHERE expense_id=?', [expenseId]),
+    db.query('SELECT * FROM food_expenses     WHERE expense_id=?', [expenseId]),
+    db.query('SELECT * FROM hotel_expenses    WHERE expense_id=?', [expenseId]),
+    db.query('SELECT * FROM misc_expenses     WHERE expense_id=?', [expenseId]),
+  ]);
+  return { journey, returns, stay, travel, food, hotel, misc };
+}
+
+router.get('/claim-amount-check', auth, adminOnly, async (req, res) => {
+  try {
+    const [expenses] = await db.query(
+      `SELECT ef.expense_id, ef.claim_amount, ef.status, ef.is_single_day_travel,
+              e.full_name AS employee_name, e.emp_code
+       FROM expense_form ef
+       JOIN employees e ON ef.emp_id = e.emp_id
+       ORDER BY ef.expense_id`
+    );
+
+    const mismatches = [];
+    for (const exp of expenses) {
+      const { journey, returns, stay, travel, food, hotel, misc } = await fetchExpenseLineItems(exp.expense_id);
+      const returnsToUse = exp.is_single_day_travel ? [] : returns;
+      const correctTotal = computeClaimTotal(journey, returnsToUse, stay, travel, food, hotel, misc);
+      const stored = parseFloat(exp.claim_amount) || 0;
+      // Guard against floating point noise (e.g. 1909.999999999998 vs 1910)
+      if (Math.abs(correctTotal - stored) > 0.01) {
+        mismatches.push({
+          expense_id:     exp.expense_id,
+          employee_name:  exp.employee_name,
+          emp_code:       exp.emp_code,
+          status:         exp.status,
+          stored_amount:  stored,
+          correct_amount: Math.round(correctTotal * 100) / 100,
+          difference:     Math.round((correctTotal - stored) * 100) / 100,
+        });
+      }
+    }
+
+    res.json({ total_checked: expenses.length, mismatches_found: mismatches.length, mismatches });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error: ' + err.message });
+  }
+});
+
+router.post('/claim-amount-check/fix', auth, adminOnly, async (req, res) => {
+  try {
+    const { expense_ids } = req.body;
+    if (!Array.isArray(expense_ids) || expense_ids.length === 0) {
+      return res.status(400).json({ message: 'expense_ids array is required — run the check first and pass back the IDs to fix.' });
+    }
+
+    const fixed = [];
+    for (const expenseId of expense_ids) {
+      const [[exp]] = await db.query(
+        'SELECT claim_amount, is_single_day_travel FROM expense_form WHERE expense_id=?', [expenseId]
+      );
+      if (!exp) continue;
+
+      const { journey, returns, stay, travel, food, hotel, misc } = await fetchExpenseLineItems(expenseId);
+      const returnsToUse = exp.is_single_day_travel ? [] : returns;
+      const correctTotal = Math.round(computeClaimTotal(journey, returnsToUse, stay, travel, food, hotel, misc) * 100) / 100;
+      const oldAmount = parseFloat(exp.claim_amount) || 0;
+
+      if (Math.abs(correctTotal - oldAmount) > 0.01) {
+        await db.query('UPDATE expense_form SET claim_amount=? WHERE expense_id=?', [correctTotal, expenseId]);
+        fixed.push({ expense_id: expenseId, old_amount: oldAmount, new_amount: correctTotal });
+      }
+    }
+
+    if (fixed.length > 0) {
+      await logAudit(db, req, 'claim_amount_corrected', 'expense', null,
+        `${fixed.length} expense(s)`,
+        `Recalculated claim_amount for ${fixed.length} expense(s): ` +
+        fixed.map(f => `#${f.expense_id} (${f.old_amount} \u2192 ${f.new_amount})`).join(', '));
+    }
+
+    res.json({ fixed_count: fixed.length, fixed });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error: ' + err.message });
   }
 });
 

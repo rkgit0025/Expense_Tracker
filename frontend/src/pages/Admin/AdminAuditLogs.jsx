@@ -40,6 +40,7 @@ const ACTION_OPTIONS = [
   { value: 'location_deleted',    label: '🗑️ Location Deleted' },
   // System
   { value: 'database_backup',     label: '🗄️ Database Backup Downloaded' },
+  { value: 'claim_amount_corrected', label: '🧮 Claim Amount Corrected' },
 ];
 
 const ENTITY_OPTIONS = [
@@ -84,6 +85,7 @@ const ACTION_COLORS = {
   location_deleted:     { bg:'#fee2e2', color:'#991b1b' },
   attachments_downloaded: { bg:'#dbeafe', color:'#1e40af' },
   database_backup:      { bg:'#e0e7ff', color:'#3730a3' },
+  claim_amount_corrected: { bg:'#fef3c7', color:'#92400e' },
 };
 
 const ACTION_ICON = {
@@ -116,6 +118,7 @@ const ACTION_ICON = {
   location_deleted:     '🗑️',
   attachments_downloaded: '⬇️',
   database_backup:      '🗄️',
+  claim_amount_corrected: '🧮',
 };
 
 const ROLE_COLORS = {

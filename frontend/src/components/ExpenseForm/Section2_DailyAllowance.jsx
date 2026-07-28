@@ -14,6 +14,14 @@ function emptyRow() {
   return { from_date: '', to_date: '', from_location: '', to_location: '', scope: 'DA-Metro', no_of_days: 0, amount_per_day: 0, total_amount: 0 };
 }
 
+// Compact display for a 'YYYY-MM-DD' string, e.g. '2026-07-09' -> '9 Jul'
+function formatShort(dateStr) {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  if (isNaN(d)) return dateStr;
+  return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+}
+
 // Expand a from/to date range into an array of 'YYYY-MM-DD' calendar-day
 // strings (inclusive). Pure UTC-timestamp arithmetic — matches how calcDays()
 // already computes day counts, so the two never disagree.
@@ -74,7 +82,7 @@ function recalcGlobalOverlap(journeyRows, returnRows, stayRows) {
 
 function AllowanceSubSection({
   title, letter, section, rows, onFieldChange, onAddRow, onDelRow,
-  readOnly, rateMap, disabledNote, lockToDate,
+  readOnly, rateMap, disabledNote, lockToDate, minDate, maxDate,
 }) {
   return (
     <div style={{ marginBottom: '20px', opacity: disabledNote ? 0.6 : 1 }}>
@@ -97,6 +105,16 @@ function AllowanceSubSection({
         )}
       </div>
 
+      {!disabledNote && (minDate || maxDate) && (
+        <div style={{ fontSize: '11px', color: 'var(--gray-400)', marginBottom: '8px', paddingLeft: '2px' }}>
+          {minDate && maxDate
+            ? `📅 Dates must fall between the Travel and Return dates (${formatShort(minDate)} – ${formatShort(maxDate)}).`
+            : minDate
+              ? `📅 Dates must be on or after the Travel date (${formatShort(minDate)}).`
+              : `📅 Dates must be on or before the Return date (${formatShort(maxDate)}).`}
+        </div>
+      )}
+
       {rows.map((row, idx) => {
         const naiveDays = calcDays(row.from_date, row.to_date);
         const overlapTrimmed = naiveDays > (row.no_of_days || 0);
@@ -115,7 +133,9 @@ function AllowanceSubSection({
               <label className="form-label">From Date</label>
               <input
                 type="date" className="form-control"
-                value={row.from_date} disabled={readOnly} max={today}
+                value={row.from_date} disabled={readOnly}
+                max={maxDate && maxDate < today ? maxDate : today}
+                min={minDate || undefined}
                 onChange={e => onFieldChange(section, idx, 'from_date', e.target.value)}
               />
             </div>
@@ -128,8 +148,9 @@ function AllowanceSubSection({
               </label>
               <input
                 type="date" className={lockToDate ? 'form-control readonly-styled' : 'form-control'}
-                value={row.to_date} disabled={readOnly || lockToDate} max={today}
-                min={row.from_date}
+                value={row.to_date} disabled={readOnly || lockToDate}
+                max={maxDate && maxDate < today ? maxDate : today}
+                min={row.from_date || minDate || undefined}
                 onChange={e => onFieldChange(section, idx, 'to_date', e.target.value)}
               />
             </div>
@@ -278,6 +299,14 @@ export default function Section2_DailyAllowance({
     if (val) commit({ ...sections, returns: [emptyRow()] });
   };
 
+  // Bounds for cross-section date validation: Return can't start before the
+  // Travel leg ends, and Site Allowance (Stay) days must fall between the
+  // Travel and Return dates (when a Return date exists).
+  const journeyLatestDate = (sections.journey || [])
+    .map(r => r.to_date).filter(Boolean).sort().pop() || null;
+  const returnEarliestDate = (sections.returns || [])
+    .map(r => r.from_date).filter(Boolean).sort()[0] || null;
+
   // Grand totals
   const allRows  = [...(journey || []), ...(returns || []), ...(stay || [])];
   const total    = allRows.reduce((s, r) => s + (parseFloat(r.total_amount) || 0), 0);
@@ -363,6 +392,7 @@ export default function Section2_DailyAllowance({
         readOnly={readOnly || !!isSingleDayTravel}
         rateMap={rateMap}
         disabledNote={isSingleDayTravel ? 'Not applicable for single-day travel' : null}
+        minDate={journeyLatestDate}
       />
 
       <AllowanceSubSection
@@ -372,6 +402,8 @@ export default function Section2_DailyAllowance({
         readOnly={readOnly}
         rateMap={rateMap}
         lockToDate={!!isSingleDayTravel}
+        minDate={journeyLatestDate}
+        maxDate={returnEarliestDate}
       />
 
       {/* D: Allowance Scope Total */}

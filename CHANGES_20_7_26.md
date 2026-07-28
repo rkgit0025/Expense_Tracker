@@ -1,5 +1,89 @@
 # Changes — 20 July 2026 update
 
+## Fresh start — 28 July 2026
+
+Per request: starting clean from this codebase as the new baseline. Everything below this point in
+the file is historical (from a previous round of work, including audit log timezone changes that
+did not hold up in production) and is being set aside for now — this baseline does **not** include
+any of that work. The only change made in this update is the one described right below.
+
+### Added: Section 2 date-order validation (Daily Allowance)
+
+Two new constraints on the date pickers in `Section2_DailyAllowance.jsx`, enforced the same way the
+app already prevents future dates (native date-picker min/max, not a separate popup or error
+message):
+
+- **Return Journey** can no longer be dated before the latest Travel Days date — you can't return
+  before you've traveled.
+- **DA for Stay Days (Site Allowance)** must fall between the Travel date and the Return date (when
+  a Return date has been entered) — site days only make sense between arriving and leaving.
+
+Both bounds recompute live as Travel/Return dates are edited, and a small note appears under each
+affected section explaining the current constraint. Boundary dates themselves are valid, selectable
+values — e.g. a Stay date exactly matching the Return date is allowed, not rejected — matching how
+overlapping boundary days are already meant to work in this form (billed once, not blocked).
+
+Also fixed a small related gap found while implementing this: the Stay Days "From Date" field was
+only ever capped at today's date and didn't respect the Return date as an upper bound the way "To
+Date" already did — now both fields enforce the same window consistently.
+
+**Scope of this change:** exactly one file touched —
+`frontend/src/components/ExpenseForm/Section2_DailyAllowance.jsx`. Nothing else in this zip was
+modified; verified with a full project diff against the uploaded baseline before packaging. A full
+production build of the frontend was run against this exact codebase to confirm it compiles cleanly
+with this change in place.
+
+---
+
+## Update — 22 July 2026 (Claim Amount Check tool + stale-data root cause)
+
+Investigated the Rohit Raturi discrepancy (list showed ₹1,910, detail view correctly showed
+₹3,503). Confirmed this is the same root cause as the earlier Manjot Singh case — **not** a new
+bug, and **not** related to rejecting an expense (checked the reject route directly: it only ever
+touches status/comment/reviewer fields, never `claim_amount`). This specific record's
+`claim_amount` was calculated and saved before last update's fix went in, and — like any existing
+record — never self-corrects just by being viewed. Verified this precisely: recreated the exact
+scenario (a DA-only expense, then edited to add the same three travel legs) against the *current*
+code, and it correctly recalculated to 3,503 on the edit. The fix works; old records just need to
+be resaved or corrected once.
+
+**Refactor:** the claim-total calculation used by the create and update routes has been extracted
+into one shared function, `backend/config/claimCalc.js` (`computeClaimTotal`), so the two routes —
+and the new tool below — can never drift out of sync with each other again the way `claim_amount`
+and the on-screen summary once did.
+
+**New: admin "Claim Amount Check" tool** (sidebar → Claim Amount Check, admin only). Two new
+endpoints:
+  - `GET /api/admin/claim-amount-check` — read-only, scans every expense and lists any whose
+    stored `claim_amount` doesn't match what its actual Daily Allowance / Travel / Food / Hotel /
+    Misc entries currently add up to. Never modifies anything.
+  - `POST /api/admin/claim-amount-check/fix` — takes an explicit list of expense IDs (from the
+    check above) and recalculates+saves the correct total for each, logging an audit entry.
+
+Nothing is ever fixed automatically or silently — the check is read-only, and applying a fix
+requires an explicit confirm click per expense or "Fix All" with a warning first.
+
+**Tested against real data, not just the synthetic case:** running the check against the sample
+database found **4 real pre-existing mismatches**, not just the one I was reproducing — confirming
+this is worth a proper one-time sweep rather than fixing records as they're individually noticed.
+Also verified: the check by itself never writes anything, the fix correctly recalculates and
+saves, and an audit log entry is correctly recorded for every correction.
+
+**Recommended next step:** run the check once via the new admin page to see the full scope, and
+fix what it finds. Consider taking a database backup first (the Backup Database page from an
+earlier update) since this does modify financial records, even though each change is a correction
+back to the mathematically correct total.
+
+---
+
+## ⚠️ Security note (not a code issue, but important)
+The zip you uploaded for this session included your actual `backend/.env` file with a live email
+account password in plaintext. I did not use it or repeat it back anywhere, but it was transmitted
+to me as part of the files. Please rotate that password, and avoid including `.env` in any future
+exports — it's meant to stay only on your server.
+
+---
+
 ## Update — 21 July 2026 (claim_amount under-counting travel entries)
 
 Fixed the bug diagnosed in the previous session: the stored `claim_amount` (what the Expenses

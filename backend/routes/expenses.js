@@ -7,6 +7,7 @@ const PDFDocument = require('pdfkit');
 const db      = require('../config/db');
 const { sendExpenseSubmissionEmail, sendExpenseActionEmail } = require('../config/mailer');
 const { logAudit } = require('../config/audit');
+const { computeClaimTotal } = require('../config/claimCalc');
 const auth    = require('../middleware/auth');
 const { authorize } = require('../middleware/auth');
 const upload  = require('../middleware/upload');
@@ -232,17 +233,7 @@ router.post('/', auth, async (req, res) => {
     const isSingleDayTravel = !!req.body.is_single_day_travel;
     const returnsToUse = isSingleDayTravel ? [] : returns;
 
-    const sumArr = (arr, key) => (arr || []).reduce((s, r) => s + (parseFloat(r[key]) || 0), 0);
-    // Travel entries carry two amount fields — `amount` (the rate typed in) and
-    // `total_amount` (a computed field). A row loaded from an existing draft that
-    // wasn't re-touched in this save can have total_amount empty while amount is
-    // still set — fall back to amount here too, matching insertTravel() below and
-    // the on-screen Total Claim Summary, so claim_amount never silently drops a
-    // travel entry's value.
-    const sumTravel = (arr) => (arr || []).reduce((s, r) => s + (parseFloat(r.total_amount ?? r.amount) || 0), 0);
-    const totalClaim = sumArr(journey,'total_amount') + sumArr(returnsToUse,'total_amount') +
-                       sumArr(stay,'total_amount')    + sumTravel(travel) +
-                       sumArr(food,'amount')          + sumArr(hotel,'amount') + sumArr(misc,'amount');
+    const totalClaim = computeClaimTotal(journey, returnsToUse, stay, travel, food, hotel, misc);
 
     // Save override fields only if the columns exist in expense_form
     const [efColsPost] = await conn.query(
@@ -310,12 +301,7 @@ router.put('/:id', auth, async (req, res) => {
     const isSingleDayTravel = !!req.body.is_single_day_travel;
     const returnsToUse = isSingleDayTravel ? [] : returns;
 
-    const sumArr = (arr, key) => (arr || []).reduce((s, r) => s + (parseFloat(r[key]) || 0), 0);
-    // See matching comment in the POST route above — same amount fallback needed here.
-    const sumTravel = (arr) => (arr || []).reduce((s, r) => s + (parseFloat(r.total_amount ?? r.amount) || 0), 0);
-    const totalClaim = sumArr(journey,'total_amount') + sumArr(returnsToUse,'total_amount') +
-                       sumArr(stay,'total_amount')    + sumTravel(travel) +
-                       sumArr(food,'amount')          + sumArr(hotel,'amount') + sumArr(misc,'amount');
+    const totalClaim = computeClaimTotal(journey, returnsToUse, stay, travel, food, hotel, misc);
 
     // Save override fields only if the columns exist
     const [efColsPut] = await conn.query(

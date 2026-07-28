@@ -17,6 +17,7 @@ const NAV = [
   { to: '/admin/master-data',  icon: '🗂️', label: 'Master Data',        roles: ['admin','hr'] },
   { to: '/admin/audit-logs',  icon: '📜', label: 'Audit Logs',          roles: ['admin'] },
   { to: '/admin/backup',      icon: '🗄️', label: 'Backup Database',     roles: ['admin'] },
+  { to: '/admin/claim-audit', icon: '🧮', label: 'Claim Amount Check',  roles: ['admin'] },
 ];
 
 const ROLE_COLORS = {
