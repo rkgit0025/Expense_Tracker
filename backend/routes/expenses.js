@@ -943,7 +943,7 @@ router.get('/:id/pdf', auth, async (req, res) => {
     const INR = (v) => `Rs. ${parseFloat(v || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
     const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' }) : '—';
 
-    const doc = new PDFDocument({ margin: 40, size: 'A4' });
+    const doc = new PDFDocument({ margin: 40, size: 'A4', bufferPages: true });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="expense_${expenseId}.pdf"`);
     doc.pipe(res);
@@ -954,6 +954,46 @@ router.get('/:id/pdf', auth, async (req, res) => {
     const GRAY = '#64748b';
     const LightGray = '#f1f5f9';
 
+    // ── Pagination ──
+    // Previously this generator tracked `y` by hand and never checked it against the
+    // page height, so once enough rows pushed `y` past the bottom margin, PDFKit would
+    // silently auto-break individual .text() calls onto new pages — splitting a label
+    // from its value (e.g. "HR:" on one page, "Approved" alone on the next) and leaving
+    // near-empty trailing pages. ensureSpace()/startNewPage() below make every element
+    // check for room first, and repeat the table header when a table itself has to
+    // continue onto a new page.
+    const PAGE_TOP = doc.page.margins.top;                          // 40
+    const PAGE_BOTTOM = doc.page.height - doc.page.margins.bottom;  // usable bottom edge
+
+    let y = 0;
+    let currentTableCols = null; // columns of the table currently being drawn, so its header can repeat after a page break
+
+    const drawTableHeaderRow = (cols) => {
+      doc.rect(40, y, W, 16).fill(LightGray);
+      let x = 44;
+      cols.forEach(c => {
+        doc.fillColor(NAVY).fontSize(8).font('Helvetica-Bold').text(c.label, x, y + 4, { width: c.w, align: c.align || 'left' });
+        x += c.w;
+      });
+      y += 18;
+    };
+
+    const startNewPage = () => {
+      doc.addPage();
+      y = PAGE_TOP;
+      // Slim continuation banner so a page is still identifiable if separated from the rest
+      doc.rect(40, y, W, 20).fill(NAVY);
+      doc.fillColor(AMBER).fontSize(8).font('Helvetica-Bold').text(`#${expenseId}`, 46, y + 6);
+      doc.fillColor('white').fontSize(9).font('Helvetica-Bold').text('EXPENSE CLAIM (continued)', 80, y + 6);
+      y += 28;
+      if (currentTableCols) drawTableHeaderRow(currentTableCols); // resume the table with its header repeated
+    };
+
+    // Call before drawing anything `h` points tall; breaks to a new page first if it won't fit
+    const ensureSpace = (h) => {
+      if (y + h > PAGE_BOTTOM) startNewPage();
+    };
+
     // ── Header ──
     doc.rect(40, 40, W, 56).fill(NAVY);
     doc.fillColor('white').fontSize(18).font('Helvetica-Bold').text('EXPENSE CLAIM', 50, 52);
@@ -963,10 +1003,12 @@ router.get('/:id/pdf', auth, async (req, res) => {
       300, 62, { width: 240, align: 'right' }
     );
 
-    let y = 112;
+    y = 112;
 
     // ── Section helper ──
     const section = (title, num) => {
+      ensureSpace(50); // bar + room for at least the first line beneath it
+      currentTableCols = null; // a new section is never a continuation of the previous table
       doc.rect(40, y, W, 22).fill(NAVY);
       doc.fillColor(AMBER).fontSize(8).font('Helvetica-Bold')
         .text(num, 45, y + 7);
@@ -976,6 +1018,7 @@ router.get('/:id/pdf', auth, async (req, res) => {
     };
 
     const row2 = (l1, v1, l2, v2) => {
+      ensureSpace(26);
       doc.fillColor(GRAY).fontSize(8).font('Helvetica-Bold').text(l1, 44, y);
       doc.fillColor('#1e293b').fontSize(9).font('Helvetica').text(v1 || '—', 44, y + 10);
       if (l2 !== undefined) {
@@ -986,26 +1029,33 @@ router.get('/:id/pdf', auth, async (req, res) => {
     };
 
     const tableHeader = (cols) => {
-      doc.rect(40, y, W, 16).fill(LightGray);
-      let x = 44;
-      cols.forEach(c => {
-        doc.fillColor(NAVY).fontSize(8).font('Helvetica-Bold').text(c.label, x, y + 4, { width: c.w, align: c.align || 'left' });
-        x += c.w;
-      });
-      y += 18;
+      ensureSpace(18);
+      currentTableCols = cols;
+      drawTableHeaderRow(cols);
     };
 
     const tableRow = (cols, vals, even) => {
-      if (even) doc.rect(40, y, W, 14).fill('#f8fafc');
+      // Measure the wrapped height first so a long cell (e.g. a long location name)
+      // never overlaps the row below it — row height now adapts to its content.
+      doc.font('Helvetica').fontSize(8);
+      let rowH = 16;
+      cols.forEach((c, i) => {
+        const h = doc.heightOfString(String(vals[i] ?? '—'), { width: c.w });
+        rowH = Math.max(rowH, h + 6);
+      });
+      ensureSpace(rowH);
+      if (even) doc.rect(40, y, W, rowH).fill('#f8fafc');
       let x = 44;
       cols.forEach((c, i) => {
-        doc.fillColor('#334155').fontSize(8).font('Helvetica').text(String(vals[i] || '—'), x, y + 3, { width: c.w, align: c.align || 'left' });
+        doc.fillColor('#334155').fontSize(8).font('Helvetica').text(String(vals[i] ?? '—'), x, y + 3, { width: c.w, align: c.align || 'left' });
         x += c.w;
       });
-      y += 16;
+      y += rowH;
     };
 
     const tableFoot = (label, amount) => {
+      currentTableCols = null; // the summary bar is never part of a continuing table
+      ensureSpace(24);
       doc.rect(40, y, W, 18).fill(NAVY);
       doc.fillColor('white').fontSize(9).font('Helvetica-Bold').text(label, 44, y + 4);
       doc.fillColor(AMBER).fontSize(10).font('Helvetica-Bold').text(amount, 44, y + 4, { width: W - 8, align: 'right' });
@@ -1028,6 +1078,7 @@ router.get('/:id/pdf', auth, async (req, res) => {
     ];
     let daTotal = 0;
     if (form.is_single_day_travel) {
+      ensureSpace(14);
       doc.fillColor('#92400e').fontSize(8).font('Helvetica-Oblique')
         .text('Single-Day Travel', 44, y);
       y += 14;
@@ -1049,6 +1100,7 @@ router.get('/:id/pdf', auth, async (req, res) => {
         ], i % 2 === 0);
         daTotal += parseFloat(r.total_amount || 0);
       });
+      currentTableCols = null;
       y += 4;
     });
 
@@ -1062,6 +1114,7 @@ router.get('/:id/pdf', auth, async (req, res) => {
       ];
       tableHeader(cols);
       travel.forEach((r, i) => tableRow(cols, [fmtDate(r.from_date), fmtDate(r.to_date), r.from_location, r.to_location, r.mode_of_travel, INR(r.amount)], i % 2 === 0));
+      currentTableCols = null;
       y += 4;
     }
 
@@ -1074,6 +1127,7 @@ router.get('/:id/pdf', auth, async (req, res) => {
       ];
       tableHeader(cols);
       food.forEach((r, i) => tableRow(cols, [fmtDate(r.from_date), fmtDate(r.to_date), r.sharing, r.location, INR(r.amount)], i % 2 === 0));
+      currentTableCols = null;
       y += 4;
     }
 
@@ -1086,6 +1140,7 @@ router.get('/:id/pdf', auth, async (req, res) => {
       ];
       tableHeader(cols);
       hotel.forEach((r, i) => tableRow(cols, [fmtDate(r.from_date), fmtDate(r.to_date), r.sharing, r.location, INR(r.amount)], i % 2 === 0));
+      currentTableCols = null;
       y += 4;
     }
 
@@ -1098,6 +1153,7 @@ router.get('/:id/pdf', auth, async (req, res) => {
       ];
       tableHeader(cols);
       misc.forEach((r, i) => tableRow(cols, [fmtDate(r.expense_date), r.reason, r.location, INR(r.amount)], i % 2 === 0));
+      currentTableCols = null;
       y += 4;
     }
 
@@ -1108,28 +1164,41 @@ router.get('/:id/pdf', auth, async (req, res) => {
     // ── Review comments ──
     if (form.coordinator_comment || form.hr_comment || form.accounts_comment) {
       y += 8;
+      ensureSpace(22 + 16);
       doc.rect(40, y, W, 22).fill(LightGray);
       doc.fillColor(NAVY).fontSize(10).font('Helvetica-Bold').text('Review Comments', 44, y + 6);
       y += 28;
       if (form.coordinator_comment) {
+        ensureSpace(16);
         doc.fillColor(GRAY).fontSize(8).font('Helvetica-Bold').text('Coordinator:', 44, y);
         doc.fillColor('#334155').fontSize(9).font('Helvetica').text(form.coordinator_comment, 120, y);
         y += 16;
       }
       if (form.hr_comment) {
+        ensureSpace(16);
         doc.fillColor(GRAY).fontSize(8).font('Helvetica-Bold').text('HR:', 44, y);
         doc.fillColor('#334155').fontSize(9).font('Helvetica').text(form.hr_comment, 120, y);
         y += 16;
       }
       if (form.accounts_comment) {
+        ensureSpace(16);
         doc.fillColor(GRAY).fontSize(8).font('Helvetica-Bold').text('Accounts:', 44, y);
         doc.fillColor('#334155').fontSize(9).font('Helvetica').text(form.accounts_comment, 120, y);
         y += 16;
       }
     }
 
-    // ── Footer ──
-   
+    // ── Footer (page numbers) on every page ──
+    const pageRange = doc.bufferedPageRange();
+    for (let i = pageRange.start; i < pageRange.start + pageRange.count; i++) {
+      doc.switchToPage(i);
+      const savedBottom = doc.page.margins.bottom;
+      doc.page.margins.bottom = 0; // writing in the margin strip would otherwise itself trigger a page break
+      doc.fillColor(GRAY).fontSize(7).font('Helvetica')
+        .text(`Expense Claim #${expenseId}   |   Page ${i - pageRange.start + 1} of ${pageRange.count}`, 40, PAGE_BOTTOM + 12, { width: W, align: 'center' });
+      doc.page.margins.bottom = savedBottom;
+    }
+
     doc.end();
   } catch (err) {
     console.error(err);
