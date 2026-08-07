@@ -52,7 +52,7 @@ function AppRoutes() {
         <Route path="admin/coordinators"
           element={<PrivateRoute roles={['admin','hr']}><AdminCoordinators /></PrivateRoute>} />
         <Route path="admin/projects"
-          element={<PrivateRoute roles={['admin','hr']}><AdminProjects /></PrivateRoute>} />
+          element={<PrivateRoute roles={['admin','hr','coordinator']}><AdminProjects /></PrivateRoute>} />
         <Route path="admin/rates"
           element={<PrivateRoute roles={['admin','hr']}><AdminRates /></PrivateRoute>} />
         <Route path="admin/master-data"

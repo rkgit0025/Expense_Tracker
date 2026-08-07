@@ -15,7 +15,7 @@ message):
 
 - **Return Journey** can no longer be dated before the latest Travel Days date — you can't return
   before you've traveled.
-- **DA for Stay Days (Site Allowance)** must fall between the Travel date and the Return date (when
+- **DA for Stay Days / Site Allowance** must fall between the Travel date and the Return date (when
   a Return date has been entered) — site days only make sense between arriving and leaving.
 
 Both bounds recompute live as Travel/Return dates are edited, and a small note appears under each
@@ -311,7 +311,7 @@ viewing/exporting an expense (form, read-only view, and PDF).
 
 ## 3. Renamed sections
 - "Travel Journey" → **"DA for Travel Days"**
-- "Stay Details" → **"DA for Stay Days (Site Allowance)"**
+- "Stay Details" → **"DA for Stay Days / Site Allowance"**
 - "Return Journey" kept its name (it's a sub-part of Travel Days, not renamed separately).
 - Updated everywhere the labels appear: the claim form, the read-only expense view, and the PDF
   export.

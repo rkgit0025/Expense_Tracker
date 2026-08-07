@@ -12,6 +12,88 @@ const auth    = require('../middleware/auth');
 const { authorize } = require('../middleware/auth');
 const upload  = require('../middleware/upload');
 
+// Do two [from,to] date ranges share at least one day? (inclusive on both ends)
+const datesOverlap = (aFrom, aTo, bFrom, bTo) => aFrom <= bTo && aTo >= bFrom;
+
+// Roles that get to see the "same employee, same date, another expense" warning
+const DA_CONFLICT_ROLES = ['coordinator', 'hr', 'admin'];
+
+// Which tables/date-fields get checked for cross-expense, same-employee date
+// conflicts, and how they're grouped into pools. journey_allowance / return_allowance
+// / stay_allowance are pooled together since they're just the three form sections
+// of the same underlying "daily allowance" claim. Travel / Food / Hotel / Misc are
+// different expense categories, so each is checked only against itself — a hotel
+// stay and a food claim on the same day are routinely legitimate together, but two
+// hotel claims for the same night across two different expense reports are not.
+// None of these tables carry emp_id directly except the DA ones, so every query
+// joins through expense_form for it, uniformly.
+const CONFLICT_POOLS = {
+  da:     { tables: ['journey_allowance', 'return_allowance', 'stay_allowance'], dateFields: ['from_date', 'to_date'] },
+  travel: { tables: ['travel_entries'], dateFields: ['from_date', 'to_date'] },
+  food:   { tables: ['food_expenses'],  dateFields: ['from_date', 'to_date'] },
+  hotel:  { tables: ['hotel_expenses'], dateFields: ['from_date', 'to_date'] },
+  misc:   { tables: ['misc_expenses'],  dateFields: ['expense_date', 'expense_date'] },
+};
+
+// Fetch every conflict-relevant row (across ALL pools at once, tagged with
+// which pool each row belongs to) for the given employee(s), excluding one
+// expense if given. This used to be 5 separate round-trips (one per pool) —
+// merged into one combined UNION ALL query instead, since this logic runs on
+// every expense list/detail page load for coordinator/hr/admin and 5x the
+// round-trips was a real, measurable part of a recent slowdown.
+async function fetchAllConflictRows(empIdOrIds, excludeExpenseId) {
+  const empIds = Array.isArray(empIdOrIds) ? empIdOrIds : [empIdOrIds];
+  const empPh = empIds.map(() => '?').join(',');
+  const parts = [];
+  const params = [];
+  Object.entries(CONFLICT_POOLS).forEach(([poolName, pool]) => {
+    pool.tables.forEach(t => {
+      parts.push(
+        `SELECT '${poolName}' AS pool, t.expense_id, ef.emp_id, t.${pool.dateFields[0]} AS from_date, t.${pool.dateFields[1]} AS to_date, ef.status
+           FROM ${t} t JOIN expense_form ef ON ef.expense_id = t.expense_id
+          WHERE ef.emp_id IN (${empPh})` + (excludeExpenseId ? ' AND t.expense_id <> ?' : '')
+      );
+      params.push(...empIds);
+      if (excludeExpenseId) params.push(excludeExpenseId);
+    });
+  });
+  const [rows] = await db.query(parts.join(' UNION ALL '), params);
+  return rows; // [{ pool, expense_id, emp_id, from_date, to_date, status }]
+}
+
+// Group rows by their `pool` tag (from fetchAllConflictRows).
+function groupByPool(rows) {
+  const byPool = {};
+  rows.forEach(r => {
+    if (!byPool[r.pool]) byPool[r.pool] = [];
+    byPool[r.pool].push(r);
+  });
+  return byPool;
+}
+
+// Attach `dateConflicts` (a de-duplicated, per-row list of {expense_id, status})
+// to each row in `rows`, based on date overlaps against `otherRows`. A draft
+// isn't a real submission yet — it might get edited or abandoned before it's
+// ever sent anywhere — so a draft is never shown as the *target* of someone
+// else's duplicate warning. (The reverse still works: if the row being
+// looked at here is itself a draft, it can still show a conflict against a
+// genuinely submitted expense, so the person drafting knows before they
+// submit — that's not filtered here since `rows` isn't touched, only which
+// `otherRows` are eligible to be listed as a match.)
+function attachRowConflicts(rows, otherRows, dateFields) {
+  const [fromF, toF] = dateFields;
+  const eligibleOthers = otherRows.filter(o => o.status !== 'draft');
+  rows.forEach(r => {
+    const byExpense = new Map();
+    eligibleOthers.forEach(o => {
+      if (datesOverlap(r[fromF], r[toF], o.from_date, o.to_date) && !byExpense.has(o.expense_id)) {
+        byExpense.set(o.expense_id, o.status);
+      }
+    });
+    r.dateConflicts = [...byExpense.entries()].map(([expense_id, status]) => ({ expense_id, status }));
+  });
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Helper: build role-based WHERE clause for expense listing
 // Coordinator sees ONLY own expenses + expenses from their assigned departments
@@ -81,6 +163,57 @@ router.get('/', auth, async (req, res) => {
        ORDER BY ef.created_at DESC`,
       params
     );
+
+    // ── Duplicate date detection (list view) ───────────────────────────────
+    // Same idea as the single-expense endpoint, computed for every row in one
+    // pass across every category (DA, Travel, Food, Hotel, Misc), via a
+    // single combined query instead of one round-trip per category. An
+    // expense is flagged if ANY category has an overlapping date with a
+    // different expense of the same employee; results are merged per row so
+    // the list only needs one flat `dateConflicts` array.
+    if (DA_CONFLICT_ROLES.includes(req.user.role) && rows.length) {
+      const empIds = [...new Set(rows.map(r => r.emp_id))];
+      const allRows = await fetchAllConflictRows(empIds, null);
+      const byPool = groupByPool(allRows);
+
+      const mergedConflictMap = new Map(); // expense_id -> Map(otherExpenseId -> status)
+      const addConflict = (a, b) => {
+        if (!mergedConflictMap.has(a.expense_id)) mergedConflictMap.set(a.expense_id, new Map());
+        mergedConflictMap.get(a.expense_id).set(b.expense_id, b.status);
+      };
+
+      Object.keys(CONFLICT_POOLS).forEach(poolName => {
+        const poolRows = byPool[poolName] || [];
+        const byEmp = new Map();
+        poolRows.forEach(r => {
+          if (!byEmp.has(r.emp_id)) byEmp.set(r.emp_id, []);
+          byEmp.get(r.emp_id).push(r);
+        });
+        // Small per-employee groups, so an O(n²) pass within each is negligible.
+        byEmp.forEach(group => {
+          for (let i = 0; i < group.length; i++) {
+            for (let j = i + 1; j < group.length; j++) {
+              const a = group[i], b = group[j];
+              if (a.expense_id === b.expense_id) continue;
+              if (datesOverlap(a.from_date, a.to_date, b.from_date, b.to_date)) {
+                // A draft isn't a real submission yet, so it's never listed
+                // as the *target* of someone else's duplicate warning — but
+                // a draft can still show a conflict against a genuinely
+                // submitted expense, so its own owner sees it before submitting.
+                if (b.status !== 'draft') addConflict(a, b);
+                if (a.status !== 'draft') addConflict(b, a);
+              }
+            }
+          }
+        });
+      });
+
+      rows.forEach(r => {
+        const m = mergedConflictMap.get(r.expense_id);
+        r.dateConflicts = m ? [...m.entries()].map(([expense_id, status]) => ({ expense_id, status })) : [];
+      });
+    }
+
     res.json(rows);
   } catch (err) {
     console.error(err);
@@ -210,6 +343,27 @@ router.get('/:id', auth, async (req, res) => {
        WHERE eh.expense_id=? ORDER BY eh.action_at DESC`,
       [expenseId]
     );
+
+    // ── Duplicate date detection (DA / Travel / Food / Hotel / Misc) ──────
+    // For each category, flag rows whose date overlaps a *different* expense
+    // of the same employee in that same category. Visible only to
+    // coordinator / hr / admin, not the employee or accounts. One combined
+    // query covers every category instead of one round-trip each.
+    if (DA_CONFLICT_ROLES.includes(role)) {
+      const hasAnyRows = journey.length || returns.length || stay.length ||
+                          travel.length || food.length || hotel.length || misc.length;
+      if (hasAnyRows) {
+        const allOther = await fetchAllConflictRows(form.emp_id, expenseId);
+        const byPool = groupByPool(allOther);
+        attachRowConflicts(journey, byPool.da     || [], CONFLICT_POOLS.da.dateFields);
+        attachRowConflicts(returns, byPool.da     || [], CONFLICT_POOLS.da.dateFields);
+        attachRowConflicts(stay,    byPool.da     || [], CONFLICT_POOLS.da.dateFields);
+        attachRowConflicts(travel,  byPool.travel || [], CONFLICT_POOLS.travel.dateFields);
+        attachRowConflicts(food,    byPool.food   || [], CONFLICT_POOLS.food.dateFields);
+        attachRowConflicts(hotel,   byPool.hotel  || [], CONFLICT_POOLS.hotel.dateFields);
+        attachRowConflicts(misc,    byPool.misc   || [], CONFLICT_POOLS.misc.dateFields);
+      }
+    }
 
     res.json({ form, journey, returns, stay, travel, food, hotel, misc, receipts, history });
   } catch (err) {
@@ -1074,7 +1228,7 @@ router.get('/:id/pdf', auth, async (req, res) => {
     const daSections = [
       ['DA for Travel Days', journey],
       ['Return Journey', returns],
-      ['DA for Stay Days (Site Allowance)', stay],
+      ['DA for Stay Days / Site Allowance', stay],
     ];
     let daTotal = 0;
     if (form.is_single_day_travel) {

@@ -113,18 +113,18 @@ export default function Section1_ProjectDetails({ data, onChange, readOnly }) {
               }
             />
           ) : (
-            <select
-              className="form-select"
+            <SearchableSelect
+              options={employees.map(e => ({
+                value: e.full_name,
+                key: e.emp_id,
+                label: `${e.full_name} (${e.emp_code})${e.designation_name ? ` · ${e.designation_name}` : ''}`,
+              }))}
               value={data.project_coordinator_hod || ''}
-              onChange={e => onChange({ ...data, project_coordinator_hod: e.target.value })}
-            >
-              <option value="">— Select employee —</option>
-              {employees.map(e => (
-                <option key={e.emp_id} value={e.full_name}>
-                  {e.full_name} ({e.emp_code}){e.designation_name ? ` · ${e.designation_name}` : ''}
-                </option>
-              ))}
-            </select>
+              onChange={val => onChange({ ...data, project_coordinator_hod: val })}
+              placeholder="— Select employee —"
+              searchPlaceholder="Search by name or code…"
+              emptyOptionLabel="— Select employee —"
+            />
           )}
         </div>
       </div>

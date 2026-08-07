@@ -7,7 +7,12 @@ import React, { useEffect, useRef, useState } from 'react';
  * <select> where the option list can get long (e.g. Project list).
  *
  * Props:
- *  - options: [{ value, label }]
+ *  - options: [{ value, label, key? }] — `key` is optional and defaults to
+ *    `value` for React's reconciliation. Pass it explicitly whenever `value`
+ *    isn't guaranteed unique on its own (e.g. storing a person's display
+ *    name rather than their id — two people can share a name, and without
+ *    a distinct key React's list reconciliation silently shows stale rows
+ *    once the list is filtered).
  *  - value: currently selected value (string)
  *  - onChange(value): called with the new value when an option is picked
  *  - placeholder: text shown when nothing is selected
@@ -164,7 +169,7 @@ export default function SearchableSelect({
               const isSelected = String(opt.value) === String(value);
               return (
                 <div
-                  key={opt.value}
+                  key={opt.key ?? opt.value}
                   role="option"
                   aria-selected={isSelected}
                   onClick={() => pick(opt.value)}

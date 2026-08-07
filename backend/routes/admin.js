@@ -540,6 +540,24 @@ router.delete('/users/:id', auth, adminOnly, async (req, res) => {
 // COORDINATOR ↔ DEPARTMENT
 // ═══════════════════════════════════════════════════════════════
 
+// Self-scoped: which departments *I* (the logged-in coordinator) cover.
+// Any authenticated user can call this — it only ever returns their own
+// assignments (empty for non-coordinators) — used by the frontend to decide
+// whether to show department-scoped abilities like adding project codes.
+router.get('/my-coordinator-departments', auth, async (req, res) => {
+  try {
+    if (req.user.role !== 'coordinator') return res.json([]);
+    const [rows] = await db.query(
+      `SELECT d.department_id, d.department_name
+       FROM coordinator_departments cd
+       JOIN departments d ON d.department_id = cd.department_id
+       WHERE cd.coordinator_emp_id = ?`,
+      [req.user.emp_id]
+    );
+    res.json(rows);
+  } catch (err) { res.status(500).json({ message: 'Server error.' }); }
+});
+
 router.get('/coordinator-departments', auth, adminOrHR, async (req, res) => {
   try {
     const [rows] = await db.query(

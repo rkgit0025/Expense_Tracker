@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, useNavigate, useLocation, Link } from 'react-router-dom';
 import api from '../api/axios';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/UIContext';
@@ -23,8 +23,14 @@ function InfoRow({ label, value }) {
 export default function ExpenseViewPage() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const { user } = useAuth();
   const { success: toastSuccess, error: toastError } = useToast();
+
+  // If we arrived via the list page's View/Review/Edit link, it handed us the
+  // tab/filters/page it had open — hand that straight back on "← Back" so the
+  // person lands exactly where they were instead of a reset list view.
+  const backListState = location.state?.listState;
 
   const [data, setData]       = useState(null);
   const [loading, setLoading] = useState(true);
@@ -71,6 +77,25 @@ export default function ExpenseViewPage() {
   const isOwnExpense = form.emp_id === user.emp_id;
   const canAct = canApprove(form.status, user.role) && !isOwnExpense;
 
+  // Duplicate-date warning — reviewer roles only. Covers DA/Site Allowance,
+  // Travel, Food, Hotel, and Misc; the backend only attaches `dateConflicts`
+  // to rows for coordinator/hr/admin, so this is naturally empty for anyone
+  // else — the role check here just keeps the intent explicit.
+  const canSeeDaConflicts = ['coordinator', 'hr', 'admin'].includes(user.role);
+  const daConflicts = canSeeDaConflicts
+    ? [
+        ['DA for Travel Days', journey, 'from_date', 'to_date'],
+        ['Return Journey', returns, 'from_date', 'to_date'],
+        ['DA for Stay Days / Site Allowance', stay, 'from_date', 'to_date'],
+        ['Travel Entries', travel, 'from_date', 'to_date'],
+        ['Food Expenses', food, 'from_date', 'to_date'],
+        ['Hotel Expenses', hotel, 'from_date', 'to_date'],
+        ['Miscellaneous Expenses', misc, 'expense_date', 'expense_date'],
+      ].flatMap(([label, rows, fromF, toF]) => (rows || []).flatMap(r =>
+        (r.dateConflicts || []).map(c => ({ label, from_date: r[fromF], to_date: r[toF], ...c }))
+      ))
+    : [];
+
   return (
     <div>
       {/* Header */}
@@ -85,10 +110,10 @@ export default function ExpenseViewPage() {
           </div>
         </div>
         <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-          <button className="btn btn-ghost" onClick={() => navigate('/expenses')}>← Back</button>
+          <button className="btn btn-ghost" onClick={() => navigate('/expenses', backListState ? { state: { listState: backListState } } : undefined)}>← Back</button>
           {['draft','coordinator_rejected','hr_rejected','accounts_rejected'].includes(form.status) &&
            (form.emp_id === user.emp_id || user.role === 'admin') && (
-            <Link to={`/expenses/${id}/edit`} className="btn btn-primary">✏️ Edit</Link>
+            <Link to={`/expenses/${id}/edit`} state={backListState ? { listState: backListState } : undefined} className="btn btn-primary">✏️ Edit</Link>
           )}
           {/* PDF download — uses fetch with auth token */}
           <button
@@ -114,6 +139,32 @@ export default function ExpenseViewPage() {
       </div>
 
       {error && <div className="alert alert-danger">⚠️ {error}</div>}
+
+      {/* Duplicate-date warning — coordinator / HR / admin only */}
+      {daConflicts.length > 0 && (
+        <div className="alert alert-danger" style={{ display: 'block' }}>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>
+            ⚠️ Duplicate Date Warning — {form.employee_name} has also claimed
+            for the same date(s) in another expense
+          </div>
+          <ul style={{ margin: 0, paddingLeft: 20 }}>
+            {daConflicts.map((c, i) => (
+              <li key={i} style={{ marginBottom: 4 }}>
+                <strong>
+                  {c.from_date === c.to_date
+                    ? formatDate(c.from_date)
+                    : `${formatDate(c.from_date)} – ${formatDate(c.to_date)}`}
+                </strong>{' '}
+                ({c.label}) also used in{' '}
+                <Link to={`/expenses/${c.expense_id}`} style={{ fontWeight: 600, textDecoration: 'underline' }}>
+                  Expense #{c.expense_id}
+                </Link>{' '}
+                <StatusBadge status={c.status} />
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* Approval action bar — only shown to non-owners with the correct role */}
       {canAct && (
@@ -210,7 +261,7 @@ export default function ExpenseViewPage() {
           ℹ️ This claim is marked as <strong>Single-Day Travel</strong> — Return Journey DA does not apply.
         </div>
       )}
-      {([['DA for Travel Days', journey], ['Return Journey', returns], ['DA for Stay Days (Site Allowance)', stay]]).map(([title, rows]) =>
+      {([['DA for Travel Days', journey], ['Return Journey', returns], ['DA for Stay Days / Site Allowance', stay]]).map(([title, rows]) =>
         rows?.length > 0 && (
           <div className="card" key={title}>
             <div className="card-header">

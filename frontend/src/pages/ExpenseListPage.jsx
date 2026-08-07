@@ -1,10 +1,11 @@
-import React, { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import React, { useEffect, useRef, useState } from 'react';
+import { Link, useLocation } from 'react-router-dom';
 import api from '../api/axios';
 import { useAuth } from '../context/AuthContext';
 import { useToast, useDialog } from '../context/UIContext';
 import { formatINR, formatDate, statusLabel } from '../utils/helpers';
 import Pagination from '../components/Pagination';
+import DateConflictBadge from '../components/DateConflictBadge';
 
 function StatusBadge({ status }) {
   return <span className={`badge badge-${status}`}>{statusLabel(status)}</span>;
@@ -30,16 +31,22 @@ export default function ExpenseListPage() {
 
   const showAllTab = ['coordinator','hr','accounts','admin'].includes(role);
 
-  const [activeTab,    setActiveTab]    = useState('mine');
+  // If we got here via the "← Back" button on an expense (see ExpenseViewPage),
+  // it carries the tab/filters/page we had open so we can restore them exactly
+  // instead of landing back on a blank "My Expenses" view.
+  const location = useLocation();
+  const restored = location.state?.listState;
+
+  const [activeTab,    setActiveTab]    = useState(restored?.activeTab    || 'mine');
   const [myExp,        setMyExp]        = useState([]);
   const [allExp,       setAllExp]       = useState([]);
   const [loading,      setLoading]      = useState(true);
-  const [search,       setSearch]       = useState('');
-  const [statusFilter, setStatusFilter] = useState('');
-  const [deptFilter,   setDeptFilter]   = useState('');
+  const [search,       setSearch]       = useState(restored?.search       || '');
+  const [statusFilter, setStatusFilter] = useState(restored?.statusFilter || '');
+  const [deptFilter,   setDeptFilter]   = useState(restored?.deptFilter   || '');
   const [loadError,    setLoadError]    = useState('');  // renamed to avoid conflict
-  const [page,         setPage]         = useState(1);
-  const [pageSize,     setPageSize]     = useState(25);
+  const [page,         setPage]         = useState(restored?.page         || 1);
+  const [pageSize,     setPageSize]     = useState(restored?.pageSize     || 25);
 
   const load = async () => {
     setLoading(true); setLoadError('');
@@ -92,11 +99,20 @@ export default function ExpenseListPage() {
   // restricts what they can see.
   const departmentOptions = [...new Set(allExp.map(e => e.department_name).filter(Boolean))].sort();
 
-  // Reset to page 1 whenever the active tab or filters change
-  useEffect(() => { setPage(1); }, [activeTab, search, statusFilter, deptFilter]);
+  // Reset to page 1 whenever the active tab or filters change — but not on the
+  // very first render, since that would immediately wipe out a restored page.
+  const skipNextReset = useRef(true);
+  useEffect(() => {
+    if (skipNextReset.current) { skipNextReset.current = false; return; }
+    setPage(1);
+  }, [activeTab, search, statusFilter, deptFilter]);
   const pageCount   = Math.max(1, Math.ceil(displayList.length / pageSize));
   const safePage    = Math.min(page, pageCount);
   const paginatedList = displayList.slice((safePage - 1) * pageSize, safePage * pageSize);
+
+  // Snapshot handed to the detail page so its "← Back" button can return here
+  // with the exact same tab/filters/page instead of a blank default view.
+  const listState = { activeTab, search, statusFilter, deptFilter, page: safePage, pageSize };
 
   const allTabHint = {
     coordinator: 'Expenses from your department awaiting your review.',
@@ -215,8 +231,11 @@ export default function ExpenseListPage() {
               </thead>
               <tbody>
                 {paginatedList.map(e => (
-                  <tr key={e.expense_id}>
-                    <td><span style={{ fontFamily:'var(--mono)', fontSize:12, color:'var(--gray-400)' }}>#{e.expense_id}</span></td>
+                  <tr key={e.expense_id} className={e.dateConflicts?.length ? 'row-has-conflict' : undefined}>
+                    <td>
+                      <span style={{ fontFamily:'var(--mono)', fontSize:12, color:'var(--gray-400)' }}>#{e.expense_id}</span>
+                      <DateConflictBadge conflicts={e.dateConflicts} />
+                    </td>
                     {activeTab==='all' && (
                       <td>
                         <div style={{ fontWeight:600 }}>{e.employee_name}</div>
@@ -237,15 +256,15 @@ export default function ExpenseListPage() {
                     <td style={{ color:'var(--gray-400)', fontSize:12 }}>{formatDate(e.submitted_at||e.created_at)}</td>
                     <td>
                       <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
-                        <Link to={`/expenses/${e.expense_id}`} className="btn btn-ghost btn-sm">View</Link>
+                        <Link to={`/expenses/${e.expense_id}`} state={{ listState }} className="btn btn-ghost btn-sm">View</Link>
                         {activeTab==='mine' && ['draft','coordinator_rejected','hr_rejected','accounts_rejected'].includes(e.status) && (
-                          <Link to={`/expenses/${e.expense_id}/edit`} className="btn btn-primary btn-sm">Edit</Link>
+                          <Link to={`/expenses/${e.expense_id}/edit`} state={{ listState }} className="btn btn-primary btn-sm">Edit</Link>
                         )}
                         {activeTab==='mine' && e.status==='draft' && (
                           <button className="btn btn-danger btn-sm" onClick={() => handleDelete(e.expense_id)}>Delete</button>
                         )}
                         {activeTab==='all' && canActionStatus(e.status, role) && (
-                          <Link to={`/expenses/${e.expense_id}`} className="btn btn-amber btn-sm">Review</Link>
+                          <Link to={`/expenses/${e.expense_id}`} state={{ listState }} className="btn btn-amber btn-sm">Review</Link>
                         )}
                       </div>
                     </td>

@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { getInitials } from '../../utils/helpers';
+import api from '../../api/axios';
 
 const NAV = [
   { to: '/',                   icon: '📊', label: 'Dashboard',          roles: ['admin','hr','accounts','employee','coordinator'] },
@@ -30,11 +31,26 @@ export default function Layout() {
   const navigate          = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
+  // A coordinator assigned to the "Projects" department can also add project
+  // codes, so they need the Projects nav link too — but only them, not every
+  // coordinator. Fetched once; harmless no-op for any other role.
+  const [isProjectsCoordinator, setIsProjectsCoordinator] = useState(false);
+  useEffect(() => {
+    if (user?.role !== 'coordinator') return;
+    api.get('/admin/my-coordinator-departments')
+      .then(({ data }) => setIsProjectsCoordinator(data.some(d => d.department_name === 'Projects')))
+      .catch(() => {});
+  }, [user?.role]);
+
   const handleLogout = () => { logout(); navigate('/login'); };
 
   const visibleNav = NAV.filter(item => {
     if (item.section) return true;
-    return item.roles.includes(user?.role);
+    if (item.roles.includes(user?.role)) return true;
+    // Special case: Projects-department coordinator gets the Projects link
+    // too, even though the static role list above only covers admin/hr.
+    if (item.to === '/admin/projects' && user?.role === 'coordinator' && isProjectsCoordinator) return true;
+    return false;
   });
 
   const roleColor = ROLE_COLORS[user?.role] || '#94a3b8';

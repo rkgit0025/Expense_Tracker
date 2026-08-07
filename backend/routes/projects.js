@@ -9,6 +9,30 @@ const { logAudit }  = require('../config/audit');
 
 const adminOrHR = authorize('admin', 'hr');
 
+// Admin/HR can always manage project codes. A coordinator can too, but only
+// if they're assigned (via coordinator_departments) to the "Projects"
+// department — i.e. they're the coordinator responsible for that department,
+// not just anyone with the coordinator role.
+const canAddProjectCode = async (req, res, next) => {
+  if (['admin', 'hr'].includes(req.user.role)) return next();
+  if (req.user.role === 'coordinator') {
+    try {
+      const [[row]] = await db.query(
+        `SELECT 1 FROM coordinator_departments cd
+           JOIN departments d ON d.department_id = cd.department_id
+          WHERE cd.coordinator_emp_id = ? AND d.department_name = 'Projects'
+          LIMIT 1`,
+        [req.user.emp_id]
+      );
+      if (row) return next();
+    } catch (err) {
+      console.error(err);
+      return res.status(500).json({ message: 'Server error.' });
+    }
+  }
+  return res.status(403).json({ message: 'Forbidden: only admin, HR, or the Projects-department coordinator can add project codes.' });
+};
+
 // in-memory multer for bulk upload parsing
 const uploadMem = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
@@ -144,8 +168,8 @@ router.get('/:id', auth, async (req, res) => {
   }
 });
 
-// ── POST create project (admin + HR) ─────────────────────────────────────────
-router.post('/', auth, adminOrHR, async (req, res) => {
+// ── POST create project (admin + HR + the Projects-department coordinator) ──
+router.post('/', auth, canAddProjectCode, async (req, res) => {
   try {
     const { project_code, project_name, site_location, project_coordinator_hod, site_incharge_emp_code } = req.body;
     if (!project_code || !project_name)

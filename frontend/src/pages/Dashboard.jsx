@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import api from '../api/axios';
 import { useAuth } from '../context/AuthContext';
 import { formatINR, formatDate, formatDateTime, statusLabel } from '../utils/helpers';
+import DateConflictBadge from '../components/DateConflictBadge';
 
 function StatusBadge({ status }) {
   return <span className={`badge badge-${status}`}>{statusLabel(status)}</span>;
@@ -348,8 +349,11 @@ export default function Dashboard() {
               </thead>
               <tbody>
                 {recent.map(e => (
-                  <tr key={e.expense_id}>
-                    <td><span style={{ fontFamily:'var(--mono)', fontSize:12 }}>#{e.expense_id}</span></td>
+                  <tr key={e.expense_id} className={e.dateConflicts?.length ? 'row-has-conflict' : undefined}>
+                    <td>
+                      <span style={{ fontFamily:'var(--mono)', fontSize:12 }}>#{e.expense_id}</span>
+                      <DateConflictBadge conflicts={e.dateConflicts} />
+                    </td>
                     <td>
                       <div style={{ fontWeight:500 }}>{e.employee_name}</div>
                       <div style={{ fontSize:11, color:'var(--gray-400)' }}>{e.emp_code}</div>

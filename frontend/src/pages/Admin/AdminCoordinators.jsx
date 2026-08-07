@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import api from '../../api/axios';
 import { useToast, useDialog } from '../../context/UIContext';
+import SearchableSelect from '../../components/SearchableSelect';
 
 export default function AdminCoordinators() {
   const { success, error, warning } = useToast();
@@ -149,11 +150,14 @@ export default function AdminCoordinators() {
               </div>
               <div className="form-group">
                 <label className="form-label">Coordinator <span className="required">*</span></label>
-                <select className="form-select" value={form.coordinator_emp_id}
-                  onChange={e => setForm(p => ({ ...p, coordinator_emp_id: e.target.value }))}>
-                  <option value="">— Select coordinator —</option>
-                  {coordinators.map(c => <option key={c.emp_id} value={c.emp_id}>{c.full_name} ({c.emp_code})</option>)}
-                </select>
+                <SearchableSelect
+                  options={coordinators.map(c => ({ value: c.emp_id, key: c.emp_id, label: `${c.full_name} (${c.emp_code})` }))}
+                  value={form.coordinator_emp_id}
+                  onChange={val => setForm(p => ({ ...p, coordinator_emp_id: val }))}
+                  placeholder="— Select coordinator —"
+                  searchPlaceholder="Search by name or code…"
+                  emptyOptionLabel="— Select coordinator —"
+                />
               </div>
               <div className="form-group">
                 <label className="form-label">Department <span className="required">*</span></label>

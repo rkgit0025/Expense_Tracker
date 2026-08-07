@@ -602,3 +602,51 @@ tfoot td { padding: 10px 14px; font-weight: 600; color: var(--navy); }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 .loading-wrap { display: flex; align-items: center; justify-content: center; padding: 40px; }
+
+/* ── Duplicate DA / Site Allowance date badge + tooltip ────── */
+.da-conflict-badge {
+  display:        inline-flex;
+  align-items:    center;
+  gap:            4px;
+  margin-left:    8px;
+  padding:        2px 8px;
+  font-size:      11px;
+  font-weight:    700;
+  letter-spacing: .2px;
+  color:          #991b1b;
+  background:     var(--danger-bg);
+  border:         1px solid #fca5a5;
+  border-radius:  20px;
+  cursor:         default;
+  white-space:    nowrap;
+  vertical-align: middle;
+}
+.da-conflict-badge:hover,
+.da-conflict-badge:focus {
+  background:     #fecaca;
+  outline:        none;
+}
+.da-conflict-tooltip {
+  position:       fixed;
+  z-index:        1000;
+  width:          240px;
+  background:     var(--white);
+  border:         1px solid var(--gray-100);
+  border-radius:  var(--radius);
+  box-shadow:     var(--shadow-lg);
+  padding:        10px 12px;
+  font-size:      12px;
+}
+.da-conflict-tooltip-title {
+  font-weight:    700;
+  color:          var(--navy);
+  margin-bottom:  6px;
+}
+.da-conflict-tooltip ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.da-conflict-tooltip li { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.da-conflict-tooltip a { color: var(--navy); font-weight: 600; text-decoration: underline; }
+.da-conflict-tooltip .badge { padding: 2px 8px; }
+
+/* Accent so a flagged row is visible even without hovering the badge */
+.row-has-conflict td:first-child { border-left: 3px solid var(--danger); }
+

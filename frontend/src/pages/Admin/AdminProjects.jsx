@@ -1,13 +1,24 @@
 import React, { useEffect, useState, useRef } from 'react';
 import api from '../../api/axios';
+import { useAuth } from '../../context/AuthContext';
 import { useToast, useDialog } from '../../context/UIContext';
 import Pagination from '../../components/Pagination';
+import SearchableSelect from '../../components/SearchableSelect';
 
 const emptyForm = { project_code: '', project_name: '', site_location: '', project_coordinator_hod: '' };
 
 export default function AdminProjects() {
+  const { user }                 = useAuth();
   const { success, error, info } = useToast();
   const { confirm }              = useDialog();
+
+  // Admin/HR keep full CRUD + bulk upload, exactly as before. A coordinator
+  // assigned to the "Projects" department can also add new project codes,
+  // but not edit, delete, or bulk-upload — matching what the backend allows.
+  const isAdminOrHR      = ['admin', 'hr'].includes(user?.role);
+  const [isProjectsCoordinator, setIsProjectsCoordinator] = useState(false);
+  const canManageFully   = isAdminOrHR;
+  const canAddProject    = isAdminOrHR || isProjectsCoordinator;
 
   const [projects,   setProjects]   = useState([]);
   const [employees,  setEmployees]  = useState([]);
@@ -27,12 +38,24 @@ export default function AdminProjects() {
   const [bulkLoading,setBulkLoading]= useState(false);
   const bulkRef = useRef(null);
 
+  const [coordCheckDone, setCoordCheckDone] = useState(user?.role !== 'coordinator');
+  useEffect(() => {
+    if (user?.role !== 'coordinator') return;
+    api.get('/admin/my-coordinator-departments')
+      .then(({ data }) => setIsProjectsCoordinator(data.some(d => d.department_name === 'Projects')))
+      .catch(() => {})
+      .finally(() => setCoordCheckDone(true));
+  }, [user?.role]);
+
   const load = async () => {
     setLoading(true);
     try {
+      // /employees/list is the lightweight, all-roles-allowed lookup (id,
+      // code, name, designation) — plenty for the Coordinator/HOD picker,
+      // and unlike /admin/employees it doesn't require admin/HR.
       const [{ data: p }, { data: e }] = await Promise.all([
         api.get('/projects'),
-        api.get('/admin/employees'),
+        api.get('/admin/employees/list'),
       ]);
       setProjects(p); setEmployees(e);
     }
@@ -109,16 +132,44 @@ export default function AdminProjects() {
   const safePage  = Math.min(page, pageCount);
   const paginated = filtered.slice((safePage - 1) * pageSize, safePage * pageSize);
 
+  // A coordinator who isn't assigned to the "Projects" department shouldn't
+  // land here at all in practice (the nav link is hidden for them), but the
+  // route itself now admits any coordinator — so this is the safety net for
+  // someone hitting the URL directly.
+  const restricted = user?.role === 'coordinator' && coordCheckDone && !isProjectsCoordinator;
+
+  if (restricted) {
+    return (
+      <div className="card" style={{ padding: 48, textAlign: 'center' }}>
+        <div style={{ fontSize: 36, marginBottom: 10 }}>🔒</div>
+        <h3 style={{ color: 'var(--navy)', marginBottom: 6 }}>Restricted</h3>
+        <p style={{ color: 'var(--gray-400)', fontSize: 13 }}>
+          Only the coordinator assigned to the "Projects" department can manage project codes.
+        </p>
+      </div>
+    );
+  }
+
+  if (user?.role === 'coordinator' && !coordCheckDone) {
+    return <div className="loading-wrap"><div className="spinner" /></div>;
+  }
+
   return (
     <div>
       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:20, flexWrap:'wrap', gap:10 }}>
         <div>
           <h2 style={{ fontSize:20, fontWeight:700, color:'var(--navy)' }}>🏗️ Projects</h2>
-          <p style={{ fontSize:13, color:'var(--gray-400)', marginTop:4 }}>Manage projects linked to expense claims.</p>
+          <p style={{ fontSize:13, color:'var(--gray-400)', marginTop:4 }}>
+            {canManageFully ? 'Manage projects linked to expense claims.' : 'Add new project codes for the Projects department.'}
+          </p>
         </div>
         <div style={{ display:'flex', gap:8 }}>
-          <button className="btn btn-ghost" onClick={() => { setShowBulk(true); setBulkResult(null); }}>📊 Bulk Upload</button>
-          <button className="btn btn-amber" onClick={openCreate}>➕ Add Project</button>
+          {canManageFully && (
+            <button className="btn btn-ghost" onClick={() => { setShowBulk(true); setBulkResult(null); }}>📊 Bulk Upload</button>
+          )}
+          {canAddProject && (
+            <button className="btn btn-amber" onClick={openCreate}>➕ Add Project</button>
+          )}
         </div>
       </div>
 
@@ -130,7 +181,7 @@ export default function AdminProjects() {
         {loading ? <div className="loading-wrap"><div className="spinner"/></div> : (
           <div className="table-wrap">
             <table>
-              <thead><tr><th>Code</th><th>Project Name</th><th>Site Location</th><th>Coordinator / HOD</th><th>Actions</th></tr></thead>
+              <thead><tr><th>Code</th><th>Project Name</th><th>Site Location</th><th>Coordinator / HOD</th>{canManageFully && <th>Actions</th>}</tr></thead>
               <tbody>
                 {paginated.map(p => (
                   <tr key={p.project_id}>
@@ -138,15 +189,17 @@ export default function AdminProjects() {
                     <td style={{ fontWeight:500 }}>{p.project_name}</td>
                     <td>{p.site_location || '—'}</td>
                     <td>{p.project_coordinator_hod || '—'}</td>
-                    <td>
-                      <div style={{ display:'flex', gap:6 }}>
-                        <button className="btn btn-primary btn-sm" onClick={() => openEdit(p)}>Edit</button>
-                        <button className="btn btn-danger btn-sm" onClick={() => handleDelete(p.project_id, p.project_name)}>Delete</button>
-                      </div>
-                    </td>
+                    {canManageFully && (
+                      <td>
+                        <div style={{ display:'flex', gap:6 }}>
+                          <button className="btn btn-primary btn-sm" onClick={() => openEdit(p)}>Edit</button>
+                          <button className="btn btn-danger btn-sm" onClick={() => handleDelete(p.project_id, p.project_name)}>Delete</button>
+                        </div>
+                      </td>
+                    )}
                   </tr>
                 ))}
-                {filtered.length === 0 && <tr><td colSpan={5} style={{ textAlign:'center', padding:40, color:'var(--gray-300)' }}>No projects found.</td></tr>}
+                {filtered.length === 0 && <tr><td colSpan={canManageFully ? 5 : 4} style={{ textAlign:'center', padding:40, color:'var(--gray-300)' }}>No projects found.</td></tr>}
               </tbody>
             </table>
           </div>
@@ -181,14 +234,18 @@ export default function AdminProjects() {
                 </div>
                 <div className="form-group">
                   <label className="form-label">Project Coordinator / HOD</label>
-                  <select className="form-select" value={form.project_coordinator_hod} onChange={sf('project_coordinator_hod')}>
-                    <option value="">— Select from employees —</option>
-                    {employees.map(e => (
-                      <option key={e.emp_id} value={e.full_name}>
-                        {e.full_name} ({e.emp_code}){e.designation_name ? ` · ${e.designation_name}` : ''}
-                      </option>
-                    ))}
-                  </select>
+                  <SearchableSelect
+                    options={employees.map(e => ({
+                      value: e.full_name,
+                      key: e.emp_id,
+                      label: `${e.full_name} (${e.emp_code})${e.designation_name ? ` · ${e.designation_name}` : ''}`,
+                    }))}
+                    value={form.project_coordinator_hod}
+                    onChange={val => setForm(p => ({ ...p, project_coordinator_hod: val }))}
+                    placeholder="— Select from employees —"
+                    searchPlaceholder="Search by name or code…"
+                    emptyOptionLabel="— Select from employees —"
+                  />
                 </div>
               </div>
             </div>

@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useLocation, useSearchParams } from 'react-router-dom';
 import { useToast, useDialog } from '../context/UIContext';
 import api from '../api/axios';
 import { useAuth } from '../context/AuthContext';
+import { toInputDate } from '../utils/helpers';
 import Section1_ProjectDetails  from '../components/ExpenseForm/Section1_ProjectDetails';
 import Section2_DailyAllowance  from '../components/ExpenseForm/Section2_DailyAllowance';
 import Section3_TravelEntries   from '../components/ExpenseForm/Section3_TravelEntries';
@@ -11,6 +12,17 @@ import Section5_HotelExpenses   from '../components/ExpenseForm/Section5_HotelEx
 import Section6_MiscExpenses    from '../components/ExpenseForm/Section6_MiscExpenses';
 import Section7_Receipts        from '../components/ExpenseForm/Section7_Receipts';
 import TotalSummary             from '../components/ExpenseForm/TotalSummary';
+
+// Server-loaded dates come back as full ISO datetime strings (e.g.
+// "2026-07-02T00:00:00.000Z"), but <input type="date"> only accepts a bare
+// "yyyy-MM-dd" value — anything else is silently rejected and the field just
+// renders blank. Normalize every date field the moment it arrives from the
+// API, before it ever reaches a form field.
+const normDates = (rows, fields) => (rows || []).map(r => {
+  const out = { ...r };
+  fields.forEach(f => { if (out[f]) out[f] = toInputDate(out[f]); });
+  return out;
+});
 
 const emptyDA    = () => ({ from_date: '', to_date: '', from_location: '', to_location: '', scope: 'DA-Metro', no_of_days: 0, amount_per_day: 0, total_amount: 0 });
 const emptyTravel= () => ({ from_date: '', to_date: '', from_location: '', to_location: '', mode_of_travel: 'Taxi', amount: '', no_of_days: 0, total_amount: 0 });
@@ -27,13 +39,36 @@ const STEPS = [
 export default function ExpenseFormPage() {
   const { id }        = useParams();
   const navigate      = useNavigate();
+  const location      = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { user }      = useAuth();
   // ── use toast instead of local success/error state ──
   const { success: toastSuccess, error: toastError, info: toastInfo } = useToast();
   const { confirm: confirmDialog } = useDialog();
   const isEdit = Boolean(id);
 
-  const [step,       setStep]       = useState(0);
+  // If we came here via the list/view page's "← Back" round trip, it handed
+  // us the tab/filters/page it had open so our own "← Back" can return there
+  // exactly instead of resetting to a blank list.
+  const backListState = location.state?.listState;
+
+  // The wizard step lives in the URL (?step=N) rather than pure local state,
+  // so it survives a page refresh AND the route change that happens the
+  // first time a brand-new draft is saved (see handleSaveDraft) — both of
+  // which previously reset an in-progress edit straight back to step 1.
+  const stepFromUrl = parseInt(searchParams.get('step'), 10);
+  const initialStep = Number.isInteger(stepFromUrl) && stepFromUrl >= 0 && stepFromUrl < STEPS.length ? stepFromUrl : 0;
+
+  const [step,       setStepRaw]    = useState(initialStep);
+  const goToStep = (i) => {
+    setStepRaw(i);
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      next.set('step', String(i));
+      return next;
+    }, { replace: true });
+  };
+
   const [saving,     setSaving]     = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [formError,  setFormError]  = useState('');   // inline form error only
@@ -64,13 +99,13 @@ export default function ExpenseFormPage() {
       setCoordHod(form.project_coordinator_hod_override || '');
       setStatus(form.status);
       setIsSingleDayTravel(!!form.is_single_day_travel);
-      setJourney(j?.length ? j : [emptyDA()]);
-      setReturns(r?.length ? r : [emptyDA()]);
-      setStay   (s?.length ? s : [emptyDA()]);
-      setTravel (t?.length ? t : [emptyTravel()]);
-      setFood   (f?.length ? f : [emptyFood()]);
-      setHotel  (h?.length ? h : [emptyHotel()]);
-      setMisc   (m?.length ? m : [emptyMisc()]);
+      setJourney(j?.length ? normDates(j, ['from_date','to_date']) : [emptyDA()]);
+      setReturns(r?.length ? normDates(r, ['from_date','to_date']) : [emptyDA()]);
+      setStay   (s?.length ? normDates(s, ['from_date','to_date']) : [emptyDA()]);
+      setTravel (t?.length ? normDates(t, ['from_date','to_date']) : [emptyTravel()]);
+      setFood   (f?.length ? normDates(f, ['from_date','to_date']) : [emptyFood()]);
+      setHotel  (h?.length ? normDates(h, ['from_date','to_date']) : [emptyHotel()]);
+      setMisc   (m?.length ? normDates(m, ['expense_date'])        : [emptyMisc()]);
       setReceipts(rec || []);
     }).catch(err => setFormError(err.response?.data?.message || 'Failed to load expense.'));
   }, [id, isEdit]);
@@ -83,10 +118,19 @@ export default function ExpenseFormPage() {
     journey:  journey.filter(r => r.from_date),
     returns:  returns.filter(r => r.from_date),
     stay:     stay.filter(r => r.from_date),
-    travel:   travel.filter(r => r.from_date && r.from_location),
-    food:     food.filter(r => r.from_date && r.location),
-    hotel:    hotel.filter(r => r.from_date && r.location),
-    misc:     misc.filter(r => r.expense_date && r.reason),
+    // A row only needs a date + an amount to represent a real claim — the
+    // location/reason fields are descriptive, not marked required anywhere
+    // in the UI, and were previously used to gate inclusion here too. That
+    // meant a fully-filled-in row (real date, real amount) with just that
+    // one text field left blank was silently dropped from what got saved,
+    // while the pre-submit "is this ₹0?" check below never required that
+    // field — so submission sailed through with the entry missing and the
+    // claim total wrongly at ₹0. Gating on amount instead keeps every real
+    // entry and matches what that check already treats as "real data".
+    travel:   travel.filter(r => r.from_date && (r.total_amount || r.amount)),
+    food:     food.filter(r => r.from_date && r.amount),
+    hotel:    hotel.filter(r => r.from_date && r.amount),
+    misc:     misc.filter(r => r.expense_date && r.amount),
   });
 
   const handleSaveDraft = async () => {
@@ -99,7 +143,7 @@ export default function ExpenseFormPage() {
       } else {
         const { data } = await api.post('/expenses', buildPayload());
         setExpenseId(data.expense_id);
-        navigate(`/expenses/${data.expense_id}/edit`, { replace: true });
+        navigate(`/expenses/${data.expense_id}/edit?step=${step}`, { replace: true });
         toastSuccess('Draft created. You can now upload receipts in Section 7.');
       }
     } catch (err) {
@@ -126,7 +170,7 @@ export default function ExpenseFormPage() {
       const msg = 'Total claim amount is ₹0. Please add at least one expense entry with a valid amount before submitting.';
       setFormError(msg);
       toastError(msg);
-      setStep(7); // jump to Summary so the user can see the ₹0 breakdown
+      goToStep(7); // jump to Summary so the user can see the ₹0 breakdown
       return;
     }
     // ───────────────────────────────────────────────────────────────────────────
@@ -151,7 +195,7 @@ export default function ExpenseFormPage() {
         `Please upload receipts for: ${missingReceipts.join(', ')}. ` +
         'Go to Section 7 (Receipts) to attach the required files before submitting.'
       );
-      setStep(6); // jump to receipts section
+      goToStep(6); // jump to receipts section
       return;
     }
     // ───────────────────────────────────────────────────────────────────────
@@ -236,7 +280,7 @@ export default function ExpenseFormPage() {
           )}
         </div>
         <div style={{ display:'flex', gap:10, flexWrap:'wrap' }}>
-          <button className="btn btn-ghost" onClick={() => navigate('/expenses')}>← Back</button>
+          <button className="btn btn-ghost" onClick={() => navigate('/expenses', backListState ? { state: { listState: backListState } } : undefined)}>← Back</button>
           {!readOnly && (
             <button className="btn btn-primary" onClick={handleSaveDraft} disabled={saving}>
               {saving ? '⏳ Saving...' : 'Save Draft'}
@@ -260,7 +304,7 @@ export default function ExpenseFormPage() {
             {i > 0 && <div className={`step-connector ${i <= step ? 'done' : ''}`} />}
             <div
               className={`step ${i === step ? 'active' : i < step ? 'completed' : ''}`}
-              onClick={() => setStep(i)}
+              onClick={() => goToStep(i)}
               style={{ cursor:'pointer' }}
             >
               <div className="step-circle">{i < step ? '✓' : i + 1}</div>
@@ -275,7 +319,7 @@ export default function ExpenseFormPage() {
 
       {/* Navigation */}
       <div style={{ display:'flex', justifyContent:'space-between', marginTop:8, flexWrap:'wrap', gap:10 }}>
-        <button className="btn btn-ghost" disabled={step === 0} onClick={() => setStep(s => s - 1)}>
+        <button className="btn btn-ghost" disabled={step === 0} onClick={() => goToStep(step - 1)}>
           ← Previous
         </button>
         <div style={{ display:'flex', gap:10 }}>
@@ -285,7 +329,7 @@ export default function ExpenseFormPage() {
             </button>
           )}
           {step < STEPS.length - 1 ? (
-            <button className="btn btn-amber" onClick={() => setStep(s => s + 1)}>Next →</button>
+            <button className="btn btn-amber" onClick={() => goToStep(step + 1)}>Next →</button>
           ) : (
             expenseId && ['draft','coordinator_rejected','hr_rejected','accounts_rejected'].includes(status) && (
               <button className="btn btn-success" onClick={handleSubmit} disabled={submitting}>
