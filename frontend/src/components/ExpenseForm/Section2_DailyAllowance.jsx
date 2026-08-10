@@ -341,7 +341,7 @@ export default function Section2_DailyAllowance({
         <div style={{ fontWeight: 600, fontSize: '13px', color: 'var(--navy)', marginBottom: '8px' }}>
           Is this a Single-Day Travel?
           <span style={{ fontWeight: 400, fontSize: '11px', color: 'var(--gray-400)', marginLeft: 8 }}>
-            ( No overnight stay )
+            (No overnight stay )
           </span>
         </div>
         <div style={{ display: 'flex', gap: '24px', flexWrap: 'wrap' }}>

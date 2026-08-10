@@ -18,6 +18,14 @@ const datesOverlap = (aFrom, aTo, bFrom, bTo) => aFrom <= bTo && aTo >= bFrom;
 // Roles that get to see the "same employee, same date, another expense" warning
 const DA_CONFLICT_ROLES = ['coordinator', 'hr', 'admin'];
 
+// An expense in one of these statuses is never shown as the *target* of a
+// duplicate-date warning: a draft isn't a real submission yet, and a
+// rejected expense is a closed, non-paying case — neither actually risks
+// double payment, so flagging them is just noise. Pending and every
+// *_approved stage stay eligible, since those are exactly the live,
+// still-payable submissions this warning exists to catch.
+const CONFLICT_EXCLUDED_STATUSES = ['draft', 'coordinator_rejected', 'hr_rejected', 'accounts_rejected'];
+
 // Which tables/date-fields get checked for cross-expense, same-employee date
 // conflicts, and how they're grouped into pools. journey_allowance / return_allowance
 // / stay_allowance are pooled together since they're just the three form sections
@@ -72,17 +80,16 @@ function groupByPool(rows) {
 }
 
 // Attach `dateConflicts` (a de-duplicated, per-row list of {expense_id, status})
-// to each row in `rows`, based on date overlaps against `otherRows`. A draft
-// isn't a real submission yet — it might get edited or abandoned before it's
-// ever sent anywhere — so a draft is never shown as the *target* of someone
-// else's duplicate warning. (The reverse still works: if the row being
-// looked at here is itself a draft, it can still show a conflict against a
-// genuinely submitted expense, so the person drafting knows before they
-// submit — that's not filtered here since `rows` isn't touched, only which
-// `otherRows` are eligible to be listed as a match.)
+// to each row in `rows`, based on date overlaps against `otherRows`. Drafts and
+// rejected expenses are never shown as the *target* of someone else's duplicate
+// warning — see CONFLICT_EXCLUDED_STATUSES. (The reverse still works: if the
+// row being looked at here belongs to a draft or rejected expense, it can
+// still show a conflict against a genuinely live one, so whoever's looking at
+// it knows before acting — that's not filtered here since `rows` isn't
+// touched, only which `otherRows` are eligible to be listed as a match.)
 function attachRowConflicts(rows, otherRows, dateFields) {
   const [fromF, toF] = dateFields;
-  const eligibleOthers = otherRows.filter(o => o.status !== 'draft');
+  const eligibleOthers = otherRows.filter(o => !CONFLICT_EXCLUDED_STATUSES.includes(o.status));
   rows.forEach(r => {
     const byExpense = new Map();
     eligibleOthers.forEach(o => {
@@ -196,12 +203,11 @@ router.get('/', auth, async (req, res) => {
               const a = group[i], b = group[j];
               if (a.expense_id === b.expense_id) continue;
               if (datesOverlap(a.from_date, a.to_date, b.from_date, b.to_date)) {
-                // A draft isn't a real submission yet, so it's never listed
-                // as the *target* of someone else's duplicate warning — but
-                // a draft can still show a conflict against a genuinely
-                // submitted expense, so its own owner sees it before submitting.
-                if (b.status !== 'draft') addConflict(a, b);
-                if (a.status !== 'draft') addConflict(b, a);
+                // Neither a draft nor a rejected expense is ever listed as
+                // the *target* of someone else's duplicate warning — see
+                // CONFLICT_EXCLUDED_STATUSES.
+                if (!CONFLICT_EXCLUDED_STATUSES.includes(b.status)) addConflict(a, b);
+                if (!CONFLICT_EXCLUDED_STATUSES.includes(a.status)) addConflict(b, a);
               }
             }
           }

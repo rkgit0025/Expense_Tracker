@@ -118,7 +118,22 @@ export default function Section7_Receipts({
       });
       onRefresh && onRefresh();
     } catch (err) {
-      setErrors(p => ({ ...p, [cat]: err.response?.data?.message || 'Upload failed.' }));
+      // A JSON error body means our own server rejected it (bad file type,
+      // multer's 5 MB limit, etc.) — err.response.data.message covers that.
+      // But a reverse proxy in front of the server (nginx, most commonly)
+      // often enforces its OWN upload size cap — commonly a 1 MB default —
+      // *before* the request ever reaches this app. That shows up as either
+      // a 413 with an HTML body (no .message to read) or the connection
+      // simply failing with no response at all — both of which used to just
+      // fall through to a generic, unhelpful "Upload failed." Name the real
+      // cause instead so it's fixable instead of mysterious.
+      let msg = err.response?.data?.message;
+      if (!msg && err.response?.status === 413) {
+        msg = 'The server rejected this file as too large — likely a web-server/proxy upload limit (e.g. nginx client_max_body_size) set below this app\'s 5 MB limit, not this file itself. Ask your admin to raise it.';
+      } else if (!msg && !err.response && err.request) {
+        msg = 'Upload failed — no response from the server. For a file under 5 MB this is usually a proxy/network issue rather than the file itself; ask your admin to check the web server\'s upload size limit and connectivity.';
+      }
+      setErrors(p => ({ ...p, [cat]: msg || 'Upload failed.' }));
     } finally {
       setUploading(p => ({ ...p, [cat]: false }));
       if (fileRefs.current[cat]) fileRefs.current[cat].value = '';
