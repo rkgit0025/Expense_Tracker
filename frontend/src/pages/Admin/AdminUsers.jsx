@@ -15,7 +15,7 @@ const ROLE_PERMISSIONS = {
   coordinator: ['All Employee permissions', 'View All Expenses tab (dept only)', 'Approve / Reject pending dept expenses', 'Export CSV of dept expenses'],
   hr:          ['All Coordinator permissions', 'View coordinator-approved expenses', 'Second-level approval', 'View & manage all employees'],
   accounts:    ['All HR permissions', 'Final approval (accounts_approved)', 'View all HR-approved expenses'],
-  admin:       ['Full access to all sections', 'Manage employees, users, projects', 'Configure depts, designations, locations', 'Manage allowance rates & coordinator assignments', 'Bulk uploads for employees & projects', 'View all expenses (cannot approve/reject)'],
+  admin:       ['Full access to all sections', 'Manage employees, users, projects', 'Configure depts, designations, locations', 'Manage allowance rates & coordinator assignments', 'Bulk uploads for employees & projects', 'View all expenses; can reject one at any stage, including already fully approved (cannot approve)'],
 };
 
 function RoleBadge({ role }) {

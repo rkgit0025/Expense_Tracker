@@ -12,6 +12,39 @@ const auth    = require('../middleware/auth');
 const { authorize } = require('../middleware/auth');
 const upload  = require('../middleware/upload');
 
+// Attach each food row's "shared with" people, in place, as `f.sharing_with`.
+// Used by every code path that renders food data (the JSON detail route,
+// the PDF) — pulled into one shared function specifically so a future
+// addition can't repeat the mistake of updating one and forgetting the
+// other, the way the PDF route was missed the first time this was built.
+// Safe on a database that hasn't been migrated yet (checks first).
+async function attachFoodSharing(dbConn, food) {
+  if (!food || !food.length) return;
+  const [sharingTables] = await dbConn.query(
+    `SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='food_expense_sharing'`
+  );
+  if (!sharingTables.length) {
+    food.forEach(f => { f.sharing_with = []; });
+    return;
+  }
+  const foodIds = food.map(f => f.id);
+  const ph = foodIds.map(() => '?').join(',');
+  const [sharingRows] = await dbConn.query(
+    `SELECT fes.*, e.full_name AS emp_name, e.emp_code
+       FROM food_expense_sharing fes
+       LEFT JOIN employees e ON e.emp_id = fes.emp_id
+      WHERE fes.food_expense_id IN (${ph})`,
+    foodIds
+  );
+  food.forEach(f => {
+    f.sharing_with = sharingRows
+      .filter(s => s.food_expense_id === f.id)
+      .map(s => s.person_type === 'employee'
+        ? { mode: 'employee', emp_id: s.emp_id, emp_name: s.emp_name, emp_code: s.emp_code }
+        : { mode: 'other', category: s.category, name: s.name });
+  });
+}
+
 // Do two [from,to] date ranges share at least one day? (inclusive on both ends)
 const datesOverlap = (aFrom, aTo, bFrom, bTo) => aFrom <= bTo && aTo >= bFrom;
 
@@ -24,7 +57,7 @@ const DA_CONFLICT_ROLES = ['coordinator', 'hr', 'admin'];
 // double payment, so flagging them is just noise. Pending and every
 // *_approved stage stay eligible, since those are exactly the live,
 // still-payable submissions this warning exists to catch.
-const CONFLICT_EXCLUDED_STATUSES = ['draft', 'coordinator_rejected', 'hr_rejected', 'accounts_rejected'];
+const CONFLICT_EXCLUDED_STATUSES = ['draft', 'coordinator_rejected', 'hr_rejected', 'accounts_rejected', 'admin_rejected'];
 
 // Which tables/date-fields get checked for cross-expense, same-employee date
 // conflicts, and how they're grouped into pools. journey_allowance / return_allowance
@@ -157,7 +190,7 @@ router.get('/', auth, async (req, res) => {
     const [rows] = await db.query(
       `SELECT ef.expense_id, ef.emp_id, ef.status, ef.claim_amount,
               ef.created_at, ef.submitted_at,
-              ef.coordinator_comment, ef.hr_comment, ef.accounts_comment,
+              ef.coordinator_comment, ef.hr_comment, ef.accounts_comment, ef.admin_comment,
               e.full_name AS employee_name, e.emp_code, e.department_id,
               d.designation_name, dep.department_name,
               p.project_code, p.project_name
@@ -239,7 +272,7 @@ router.get('/export/csv', auth, async (req, res) => {
               e.full_name AS employee_name, e.emp_code, e.mobile_number,
               d.designation_name, dep.department_name,
               p.project_code, p.project_name,
-              ef.coordinator_comment, ef.hr_comment, ef.accounts_comment
+              ef.coordinator_comment, ef.hr_comment, ef.accounts_comment, ef.admin_comment
        FROM expense_form ef
        JOIN employees   e   ON ef.emp_id   = e.emp_id
        LEFT JOIN designations d   ON e.designation_id = d.designation_id
@@ -258,7 +291,7 @@ router.get('/export/csv', auth, async (req, res) => {
       'Expense ID','Employee Name','Employee Code','Department','Designation',
       'Project Code','Project Name','Claim Amount (INR)',
       'Status','Submitted Date','Created Date',
-      'Coordinator Comment','HR Comment','Accounts Comment'
+      'Coordinator Comment','HR Comment','Accounts Comment','Admin Comment'
     ];
 
     const csvLines = [
@@ -267,7 +300,7 @@ router.get('/export/csv', auth, async (req, res) => {
         r.expense_id, r.employee_name, r.emp_code, r.department_name, r.designation_name,
         r.project_code, r.project_name, fmtAmt(r.claim_amount),
         r.status, fmtDate(r.submitted_at), fmtDate(r.created_at),
-        r.coordinator_comment, r.hr_comment, r.accounts_comment
+        r.coordinator_comment, r.hr_comment, r.accounts_comment, r.admin_comment
       ].map(esc).join(','))
     ];
 
@@ -339,6 +372,7 @@ router.get('/:id', auth, async (req, res) => {
     const [stay]     = await db.query('SELECT * FROM stay_allowance     WHERE expense_id=?', [expenseId]);
     const [travel]   = await db.query('SELECT * FROM travel_entries     WHERE expense_id=?', [expenseId]);
     const [food]     = await db.query('SELECT * FROM food_expenses      WHERE expense_id=?', [expenseId]);
+    await attachFoodSharing(db, food);
     const [hotel]    = await db.query('SELECT * FROM hotel_expenses     WHERE expense_id=?', [expenseId]);
     const [misc]     = await db.query('SELECT * FROM misc_expenses      WHERE expense_id=?', [expenseId]);
     const [receipts] = await db.query('SELECT * FROM expense_receipts   WHERE expense_id=?', [expenseId]);
@@ -450,7 +484,7 @@ router.put('/:id', auth, async (req, res) => {
     if (!form) return res.status(404).json({ message: 'Not found.' });
     if (form.emp_id !== req.user.emp_id && req.user.role !== 'admin')
       return res.status(403).json({ message: 'Access denied.' });
-    if (!['draft','coordinator_rejected','hr_rejected','accounts_rejected'].includes(form.status) && req.user.role !== 'admin')
+    if (!['draft','coordinator_rejected','hr_rejected','accounts_rejected','admin_rejected'].includes(form.status) && req.user.role !== 'admin')
       return res.status(400).json({ message: 'Cannot edit at this status.' });
 
     const { project_id, site_location_override, project_coordinator_hod_override,
@@ -518,7 +552,7 @@ router.post('/:id/submit', auth, async (req, res) => {
     if (!form) return res.status(404).json({ message: 'Not found.' });
     if (form.emp_id !== req.user.emp_id && req.user.role !== 'admin')
       return res.status(403).json({ message: 'Access denied.' });
-    if (!['draft','coordinator_rejected','hr_rejected','accounts_rejected'].includes(form.status))
+    if (!['draft','coordinator_rejected','hr_rejected','accounts_rejected','admin_rejected'].includes(form.status))
       return res.status(400).json({ message: 'Cannot submit at this status.' });
 
     // If submitter is coordinator/hr/accounts, auto-skip the coordinator stage.
@@ -771,8 +805,18 @@ router.post('/:id/reject', auth, async (req, res) => {
     } else if (role === 'accounts' && form.status === 'hr_approved') {
       newStatus    = 'accounts_rejected';
       updateFields = `status='accounts_rejected',accounts_comment=?,accounts_reviewed_by=?,accounts_reviewed_at=NOW()`;
+    } else if (role === 'admin' && ['pending', 'coordinator_approved', 'hr_approved', 'accounts_approved'].includes(form.status)) {
+      // Admin can reject at ANY stage still awaiting a decision, AND an
+      // already fully accounts_approved expense — a genuine override that
+      // isn't restricted to a single department or a single stage the way
+      // coordinator/hr/accounts are. Always its own distinct status rather
+      // than being attributed to whichever stage it happened to be sitting
+      // at, so it's clearly visible as an admin override, not confused with
+      // an ordinary coordinator/HR/accounts rejection.
+      newStatus    = 'admin_rejected';
+      updateFields = `status='admin_rejected',admin_comment=?,admin_reviewed_by=?,admin_reviewed_at=NOW()`;
     } else if (role === 'admin') {
-      return res.status(403).json({ message: 'Administrators are not permitted to reject expenses. Please use the correct approval role.' });
+      return res.status(403).json({ message: 'This expense cannot be rejected — it is a draft or already rejected.' });
     } else {
       return res.status(403).json({ message: 'Not authorised to reject at this stage.' });
     }
@@ -1040,8 +1084,54 @@ async function insertTravel(conn, expenseId, rows) {
 }
 async function insertFood(conn, expenseId, rows) {
   if (!rows?.length) return;
-  await conn.query('INSERT INTO food_expenses (expense_id,from_date,to_date,sharing,location,amount) VALUES ?',
-    [rows.map(r => [expenseId, toDate(r.from_date), toDate(r.to_date), r.sharing, r.location, r.amount])]);
+  // Detect whether the migration has been applied yet, so this still works
+  // (just without remarks / shared-with people) on a database that hasn't
+  // been migrated — same defensive pattern used elsewhere in this file.
+  const [cols] = await conn.query(
+    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'food_expenses'`
+  );
+  const hasRemarks = cols.some(c => c.COLUMN_NAME === 'remarks');
+  const [tables] = await conn.query(
+    `SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'food_expense_sharing'`
+  );
+  const hasSharingTable = tables.length > 0;
+
+  // Inserted one row at a time (not a bulk INSERT like the others) so we
+  // have each row's own insertId to attach its "shared with" people to —
+  // that's a one-to-many relationship, so it needs its own child table.
+  for (const r of rows) {
+    let foodExpenseId;
+    if (hasRemarks) {
+      const [result] = await conn.query(
+        'INSERT INTO food_expenses (expense_id,from_date,to_date,sharing,location,amount,remarks) VALUES (?,?,?,?,?,?,?)',
+        [expenseId, toDate(r.from_date), toDate(r.to_date), r.sharing, r.location, r.amount, r.remarks || null]
+      );
+      foodExpenseId = result.insertId;
+    } else {
+      const [result] = await conn.query(
+        'INSERT INTO food_expenses (expense_id,from_date,to_date,sharing,location,amount) VALUES (?,?,?,?,?,?)',
+        [expenseId, toDate(r.from_date), toDate(r.to_date), r.sharing, r.location, r.amount]
+      );
+      foodExpenseId = result.insertId;
+    }
+
+    if (!hasSharingTable) continue;
+    const sharingWith = (r.sharing_with || []).filter(p => p && (p.mode === 'employee' ? p.emp_id : p.mode === 'other' ? (p.name || '').trim() : false));
+    if (sharingWith.length) {
+      await conn.query(
+        'INSERT INTO food_expense_sharing (food_expense_id,person_type,emp_id,category,name) VALUES ?',
+        [sharingWith.map(p => [
+          foodExpenseId,
+          p.mode === 'employee' ? 'employee' : 'other',
+          p.mode === 'employee' ? p.emp_id : null,
+          p.mode === 'other' ? (p.category || 'Other') : null,
+          p.mode === 'other' ? p.name.trim() : null,
+        ])]
+      );
+    }
+  }
 }
 async function insertHotel(conn, expenseId, rows) {
   if (!rows?.length) return;
@@ -1097,6 +1187,7 @@ router.get('/:id/pdf', auth, async (req, res) => {
     const [stay]     = await db.query('SELECT * FROM stay_allowance     WHERE expense_id=?', [expenseId]);
     const [travel]   = await db.query('SELECT * FROM travel_entries     WHERE expense_id=?', [expenseId]);
     const [food]     = await db.query('SELECT * FROM food_expenses      WHERE expense_id=?', [expenseId]);
+    await attachFoodSharing(db, food);
     const [hotel]    = await db.query('SELECT * FROM hotel_expenses     WHERE expense_id=?', [expenseId]);
     const [misc]     = await db.query('SELECT * FROM misc_expenses      WHERE expense_id=?', [expenseId]);
 
@@ -1231,10 +1322,13 @@ router.get('/:id/pdf', auth, async (req, res) => {
     y += 4;
 
     // ── 2. Daily Allowance ──
+    // Travel Days and Return Journey keep From/To Location columns; Stay
+    // Days doesn't — it's a single place stayed at, not a journey between
+    // two locations, and the field no longer exists on that table at all.
     const daSections = [
-      ['DA for Travel Days', journey],
-      ['Return Journey', returns],
-      ['DA for Stay Days / Site Allowance', stay],
+      ['DA for Travel Days', journey, true],
+      ['Return Journey', returns, true],
+      ['DA for Stay Days / Site Allowance', stay, false],
     ];
     let daTotal = 0;
     if (form.is_single_day_travel) {
@@ -1243,21 +1337,27 @@ router.get('/:id/pdf', auth, async (req, res) => {
         .text('Single-Day Travel', 44, y);
       y += 14;
     }
-    daSections.forEach(([title, rows]) => {
+    daSections.forEach(([title, rows, showLocations]) => {
       if (!rows || !rows.length) return;
       section(`Daily Allowance — ${title}`, '2');
-      const cols = [
-        { label: 'From Date', w: 55 }, { label: 'To Date', w: 55 },
-        { label: 'From Loc.', w: 72 }, { label: 'To Loc.', w: 72 },
-        { label: 'Scope', w: 88 }, { label: 'Days', w: 28, align: 'right' },
-        { label: 'Rate/Day', w: 65, align: 'right' }, { label: 'Total', w: 80, align: 'right' }
-      ];
+      const cols = showLocations
+        ? [
+            { label: 'From Date', w: 55 }, { label: 'To Date', w: 55 },
+            { label: 'From Loc.', w: 72 }, { label: 'To Loc.', w: 72 },
+            { label: 'Scope', w: 88 }, { label: 'Days', w: 28, align: 'right' },
+            { label: 'Rate/Day', w: 65, align: 'right' }, { label: 'Total', w: 80, align: 'right' }
+          ]
+        : [
+            { label: 'From Date', w: 80 }, { label: 'To Date', w: 80 },
+            { label: 'Scope', w: 120 }, { label: 'Days', w: 45, align: 'right' },
+            { label: 'Rate/Day', w: 85, align: 'right' }, { label: 'Total', w: 105, align: 'right' }
+          ];
       tableHeader(cols);
       rows.forEach((r, i) => {
-        tableRow(cols, [
-          fmtDate(r.from_date), fmtDate(r.to_date), r.from_location, r.to_location,
-          r.scope, r.no_of_days, INR(r.amount_per_day), INR(r.total_amount)
-        ], i % 2 === 0);
+        const rowVals = showLocations
+          ? [fmtDate(r.from_date), fmtDate(r.to_date), r.from_location, r.to_location, r.scope, r.no_of_days, INR(r.amount_per_day), INR(r.total_amount)]
+          : [fmtDate(r.from_date), fmtDate(r.to_date), r.scope, r.no_of_days, INR(r.amount_per_day), INR(r.total_amount)];
+        tableRow(cols, rowVals, i % 2 === 0);
         daTotal += parseFloat(r.total_amount || 0);
       });
       currentTableCols = null;
@@ -1282,11 +1382,18 @@ router.get('/:id/pdf', auth, async (req, res) => {
     if (food && food.length) {
       section('Food Expenses', '4');
       const cols = [
-        { label: 'From', w: 80 }, { label: 'To', w: 80 },
-        { label: 'Sharing', w: 60 }, { label: 'Location', w: 165 }, { label: 'Amount', w: 90, align: 'right' }
+        { label: 'From', w: 50 }, { label: 'To', w: 50 },
+        { label: 'Sharing', w: 42 }, { label: 'Location', w: 78 },
+        { label: 'Shared With', w: 110 }, { label: 'Remarks', w: 95 },
+        { label: 'Amount', w: 90, align: 'right' }
       ];
       tableHeader(cols);
-      food.forEach((r, i) => tableRow(cols, [fmtDate(r.from_date), fmtDate(r.to_date), r.sharing, r.location, INR(r.amount)], i % 2 === 0));
+      food.forEach((r, i) => {
+        const sharedWithText = (r.sharing_with || []).map(p =>
+          p.mode === 'employee' ? `${p.emp_name} (${p.emp_code})` : `${p.category}: ${p.name}`
+        ).join('\n') || '—'; // one person per line, not run together on one line
+        tableRow(cols, [fmtDate(r.from_date), fmtDate(r.to_date), r.sharing, r.location, sharedWithText, r.remarks || '—', INR(r.amount)], i % 2 === 0);
+      });
       currentTableCols = null;
       y += 4;
     }
@@ -1322,7 +1429,7 @@ router.get('/:id/pdf', auth, async (req, res) => {
     tableFoot('TOTAL CLAIM AMOUNT', INR(form.claim_amount));
 
     // ── Review comments ──
-    if (form.coordinator_comment || form.hr_comment || form.accounts_comment) {
+    if (form.coordinator_comment || form.hr_comment || form.accounts_comment || form.admin_comment) {
       y += 8;
       ensureSpace(22 + 16);
       doc.rect(40, y, W, 22).fill(LightGray);
@@ -1344,6 +1451,12 @@ router.get('/:id/pdf', auth, async (req, res) => {
         ensureSpace(16);
         doc.fillColor(GRAY).fontSize(8).font('Helvetica-Bold').text('Accounts:', 44, y);
         doc.fillColor('#334155').fontSize(9).font('Helvetica').text(form.accounts_comment, 120, y);
+        y += 16;
+      }
+      if (form.admin_comment) {
+        ensureSpace(16);
+        doc.fillColor(GRAY).fontSize(8).font('Helvetica-Bold').text('Admin:', 44, y);
+        doc.fillColor('#334155').fontSize(9).font('Helvetica').text(form.admin_comment, 120, y);
         y += 16;
       }
     }

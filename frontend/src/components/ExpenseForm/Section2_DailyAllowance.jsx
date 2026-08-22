@@ -3,8 +3,12 @@ import api from '../../api/axios';
 import { calcDays, formatINR } from '../../utils/helpers';
 
 const today = new Date().toISOString().split('T')[0]; // No future dates allowed
-const SCOPES = ['DA-Metro', 'DA-Non-Metro', 'Site-Allowance'];
-const SCOPE_LABELS = { 'DA-Metro': 'DA – Metro', 'DA-Non-Metro': 'DA – Non-Metro', 'Site-Allowance': 'Site Allowance' };
+const SCOPES = ['DA-Metro', 'DA-Non-Metro', 'Site-Allowance', 'Spl-Approval'];
+const SCOPE_LABELS = { 'DA-Metro': 'DA – Metro', 'DA-Non-Metro': 'DA – Non-Metro', 'Site-Allowance': 'Site Allowance', 'Spl-Approval': 'Spl Approval' };
+// Which scope currently gets a manually-editable rate, instead of the rate
+// being fixed and auto-populated from the designation's configured rate
+// (like DA-Metro / DA-Non-Metro always are).
+const EDITABLE_RATE_SCOPE = 'Spl-Approval';
 // Tie-break order when two entries in different sections start on the exact
 // same date — reflects the usual chronological shape of a business trip:
 // travel out, then stay, then travel back.
@@ -83,6 +87,7 @@ function recalcGlobalOverlap(journeyRows, returnRows, stayRows) {
 function AllowanceSubSection({
   title, letter, section, rows, onFieldChange, onAddRow, onDelRow,
   readOnly, rateMap, disabledNote, lockToDate, minDate, maxDate,
+  showLocationFields = true,
 }) {
   return (
     <div style={{ marginBottom: '20px', opacity: disabledNote ? 0.6 : 1 }}>
@@ -154,22 +159,26 @@ function AllowanceSubSection({
                 onChange={e => onFieldChange(section, idx, 'to_date', e.target.value)}
               />
             </div>
-            <div className="form-group" style={{ margin: 0 }}>
-              <label className="form-label">From Location</label>
-              <input
-                type="text" className="form-control" placeholder="e.g. Delhi"
-                value={row.from_location || ''} disabled={readOnly}
-                onChange={e => onFieldChange(section, idx, 'from_location', e.target.value)}
-              />
-            </div>
-            <div className="form-group" style={{ margin: 0 }}>
-              <label className="form-label">To Location</label>
-              <input
-                type="text" className="form-control" placeholder="e.g. Mumbai"
-                value={row.to_location || ''} disabled={readOnly}
-                onChange={e => onFieldChange(section, idx, 'to_location', e.target.value)}
-              />
-            </div>
+            {showLocationFields && (
+              <>
+                <div className="form-group" style={{ margin: 0 }}>
+                  <label className="form-label">From Location</label>
+                  <input
+                    type="text" className="form-control" placeholder="e.g. Delhi"
+                    value={row.from_location || ''} disabled={readOnly}
+                    onChange={e => onFieldChange(section, idx, 'from_location', e.target.value)}
+                  />
+                </div>
+                <div className="form-group" style={{ margin: 0 }}>
+                  <label className="form-label">To Location</label>
+                  <input
+                    type="text" className="form-control" placeholder="e.g. Mumbai"
+                    value={row.to_location || ''} disabled={readOnly}
+                    onChange={e => onFieldChange(section, idx, 'to_location', e.target.value)}
+                  />
+                </div>
+              </>
+            )}
             <div className="form-group" style={{ margin: 0 }}>
               <label className="form-label">Scope</label>
               <select
@@ -192,11 +201,11 @@ function AllowanceSubSection({
             <div className="form-group" style={{ margin: 0 }}>
               <label className="form-label">
                 Rate / Day (₹)
-                {row.scope === 'Site-Allowance' && !readOnly && (
+                {row.scope === EDITABLE_RATE_SCOPE && !readOnly && (
                   <span style={{ fontSize: '10px', color: 'var(--amber)', marginLeft: '6px', fontWeight: 600 }}>✎ Editable</span>
                 )}
               </label>
-              {row.scope === 'Site-Allowance' && !readOnly ? (
+              {row.scope === EDITABLE_RATE_SCOPE && !readOnly ? (
                 <input
                   type="number" className="form-control" min="0" step="0.01"
                   value={row.amount_per_day || 0}
@@ -265,13 +274,13 @@ export default function Section2_DailyAllowance({
         updated.to_date = value;
       }
 
-      // Auto-calculate rate from backend (skip if Site-Allowance and manually editing amount)
+      // Auto-calculate rate from backend (skip if this scope has a manually-editable rate)
       if (field === 'scope' || field === 'from_date' || field === 'to_date') {
         const scope = field === 'scope' ? value : updated.scope;
-        if (scope !== 'Site-Allowance') {
+        if (scope !== EDITABLE_RATE_SCOPE) {
           updated.amount_per_day = rateMap[scope] || 0;
         } else if (field === 'scope') {
-          updated.amount_per_day = rateMap['Site-Allowance'] || 0;
+          updated.amount_per_day = rateMap[EDITABLE_RATE_SCOPE] || 0;
         }
       }
       if (field === 'amount_per_day') {
@@ -292,11 +301,11 @@ export default function Section2_DailyAllowance({
 
   const handleSingleDayChange = (val) => {
     onIsSingleDayTravelChange && onIsSingleDayTravelChange(val);
-    // Selecting single-day travel clears any Return Journey rows so DA is
-    // never auto-calculated twice for a trip that starts and ends same day.
-    // Routed through commit() so Journey/Stay correctly reclaim any days
-    // that Return was previously counting.
-    if (val) commit({ ...sections, returns: [emptyRow()] });
+    // Selecting single-day travel clears any Return Journey AND Stay Days
+    // rows — a single-day trip has no overnight stay, so DA is never
+    // auto-calculated for either once this mode is on. Routed through
+    // commit() so Journey correctly reclaims any days these were counting.
+    if (val) commit({ ...sections, returns: [emptyRow()], stay: [emptyRow()] });
   };
 
   // Bounds for cross-section date validation: Return can't start before the
@@ -318,8 +327,8 @@ export default function Section2_DailyAllowance({
     const scopeRows = allRows.filter(r => r.scope === s);
     const days      = scopeRows.reduce((a, r) => a + (parseInt(r.no_of_days) || 0), 0);
     const amount    = scopeRows.reduce((a, r) => a + (parseFloat(r.total_amount) || 0), 0);
-    // For Site-Allowance: derive effective rate from actual row data (supports manual override)
-    const effectiveRate = s === 'Site-Allowance'
+    // For the manually-editable scope: derive effective rate from actual row data (supports per-row override)
+    const effectiveRate = s === EDITABLE_RATE_SCOPE
       ? (days > 0 ? amount / days : (scopeRows[0]?.amount_per_day || rateMap[s] || 0))
       : rateMap[s] || 0;
     scopeTotals[s] = { days, amount, rate: effectiveRate };
@@ -364,7 +373,7 @@ export default function Section2_DailyAllowance({
         </div>
         {isSingleDayTravel && (
           <div style={{ marginTop: '8px', fontSize: '11px', color: '#92400e', fontWeight: 600 }}>
-            ⚠️ Return Journey (B) is disabled to prevent DA from being calculated twice for a single day. To Date will auto-fill from From Date below.
+            ⚠️ Return Journey (B) and DA for Stay Days / Site Allowance (C) are disabled — a single-day trip has no return or overnight stay to claim for. To Date will auto-fill from From Date below.
           </div>
         )}
       </div>
@@ -399,11 +408,13 @@ export default function Section2_DailyAllowance({
         title="DA for Stay Days / Site Allowance" letter="C" section="stay"
         rows={sections.stay}
         onFieldChange={handleFieldChange} onAddRow={handleAddRow} onDelRow={handleDelRow}
-        readOnly={readOnly}
+        readOnly={readOnly || !!isSingleDayTravel}
         rateMap={rateMap}
+        disabledNote={isSingleDayTravel ? 'Not applicable for single-day travel' : null}
         lockToDate={!!isSingleDayTravel}
         minDate={journeyLatestDate}
         maxDate={returnEarliestDate}
+        showLocationFields={false}
       />
 
       {/* D: Allowance Scope Total */}

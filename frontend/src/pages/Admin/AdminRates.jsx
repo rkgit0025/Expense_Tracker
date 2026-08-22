@@ -3,8 +3,8 @@ import api from '../../api/axios';
 import { formatINR } from '../../utils/helpers';
 import { useToast, useDialog } from '../../context/UIContext';
 
-const SCOPES = ['DA-Metro', 'DA-Non-Metro', 'Site-Allowance'];
-const SCOPE_LABELS = { 'DA-Metro': 'DA – Metro', 'DA-Non-Metro': 'DA – Non-Metro', 'Site-Allowance': 'Site Allowance' };
+const SCOPES = ['DA-Metro', 'DA-Non-Metro', 'Site-Allowance', 'Spl-Approval'];
+const SCOPE_LABELS = { 'DA-Metro': 'DA – Metro', 'DA-Non-Metro': 'DA – Non-Metro', 'Site-Allowance': 'Site Allowance', 'Spl-Approval': 'Spl Approval' };
 
 export default function AdminRates() {
   const { success, error } = useToast();

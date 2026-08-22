@@ -61,6 +61,7 @@ export const statusLabel = (status) => {
     hr_rejected:            'HR Rejected',
     accounts_approved:      'Accounts Approved',
     accounts_rejected:      'Accounts Rejected',
+    admin_rejected:         'Admin Rejected',
   };
   return map[status] || status;
 };
@@ -74,7 +75,7 @@ export const getInitials = (name) => {
 // Check if user can edit expense
 export const canEdit = (status, role) => {
   if (role === 'admin') return true;
-  return ['draft', 'coordinator_rejected', 'hr_rejected', 'accounts_rejected'].includes(status);
+  return ['draft', 'coordinator_rejected', 'hr_rejected', 'accounts_rejected', 'admin_rejected'].includes(status);
 };
 
 // Check if user can approve at current stage (admin explicitly excluded)
@@ -84,6 +85,20 @@ export const canApprove = (status, role) => {
   if (role === 'hr'          && status === 'coordinator_approved') return true;
   if (role === 'accounts'    && status === 'hr_approved')          return true;
   return false;
+};
+
+// Check if user can reject at current stage. Coordinator/hr/accounts follow
+// the exact same per-stage rule as canApprove — if you can approve at this
+// stage, you can reject it too. Admin is the exception: they can reject at
+// ANY stage still awaiting a decision, including an already fully
+// accounts_approved expense — a genuine override, not restricted to a
+// single department or a single stage — but still can't approve, and can't
+// touch a draft or an already-rejected expense.
+export const canReject = (status, role) => {
+  if (role === 'admin') {
+    return ['pending', 'coordinator_approved', 'hr_approved', 'accounts_approved'].includes(status);
+  }
+  return canApprove(status, role);
 };
 
 // Next stage description
@@ -97,6 +112,7 @@ export const nextStageLabel = (status) => {
     coordinator_rejected: 'Rejected by Coordinator',
     hr_rejected:          'Rejected by HR',
     accounts_rejected:    'Rejected by Accounts',
+    admin_rejected:       'Rejected by Admin',
   };
   return map[status] || status;
 };

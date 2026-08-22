@@ -237,6 +237,25 @@ tfoot td { padding: 10px 14px; font-weight: 600; color: var(--navy); }
 .badge-hr_rejected       { background: var(--danger-bg); color: #991b1b; }
 .badge-accounts_approved { background: var(--success-bg); color: #064e3b; }
 .badge-accounts_rejected { background: var(--danger-bg); color: #991b1b; }
+.badge-admin_rejected    { background: var(--danger-bg); color: #991b1b; }
+
+/* ── Food Expenses: Shared-With person picker ─────────────── */
+/* Each column has an explicit MAX so it can never stretch to fill the row
+   on a wide screen — a single `1fr` column has no ceiling and will happily
+   grow to the full container width, which is exactly what went wrong the
+   first time this was written. minmax(min, max) with a real px max keeps
+   every field compact regardless of how wide the surrounding card is. */
+.shared-with-person {
+  display:              flex;
+  flex-wrap:             wrap;
+  gap:                   8px;
+  margin-bottom:         8px;
+}
+.shared-with-person > * { flex: 0 1 260px; }         /* grow:0 — never stretches past its basis */
+.shared-with-person.employee-only > * { flex: 0 1 300px; }
+@media (max-width: 640px) {
+  .shared-with-person > * { flex: 1 1 100%; }         /* full-width stack on mobile */
+}
 
 /* ── Alert ──────────────────────────────────────────────── */
 .alert {

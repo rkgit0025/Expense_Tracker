@@ -26,7 +26,7 @@ const normDates = (rows, fields) => (rows || []).map(r => {
 
 const emptyDA    = () => ({ from_date: '', to_date: '', from_location: '', to_location: '', scope: 'DA-Metro', no_of_days: 0, amount_per_day: 0, total_amount: 0 });
 const emptyTravel= () => ({ from_date: '', to_date: '', from_location: '', to_location: '', mode_of_travel: 'Taxi', amount: '', no_of_days: 0, total_amount: 0 });
-const emptyFood  = () => ({ from_date: '', to_date: '', sharing: 1, location: '', amount: '' });
+const emptyFood  = () => ({ from_date: '', to_date: '', sharing: 1, location: '', amount: '', remarks: '', sharing_with: [] });
 const emptyHotel = () => ({ from_date: '', to_date: '', sharing: 1, location: '', amount: '' });
 const emptyMisc  = () => ({ expense_date: '', reason: '', location: '', amount: '' });
 
@@ -175,6 +175,32 @@ export default function ExpenseFormPage() {
     }
     // ───────────────────────────────────────────────────────────────────────────
 
+    // ── Shared-With validation ──────────────────────────────────────────────
+    // Sharing > 1 means the claimant plus (Sharing - 1) other people — every
+    // one of those extra slots must be identified (a real employee, or
+    // "Other" with both a category and a name) before this can be submitted.
+    const incompleteFoodEntries = [];
+    food.forEach((r, idx) => {
+      const needed = Math.max(0, (parseInt(r.sharing, 10) || 1) - 1);
+      if (needed === 0) return;
+      const sw = r.sharing_with || [];
+      const isIncomplete = Array.from({ length: needed }, (_, i) => sw[i]).some(p =>
+        !p || !(
+          (p.mode === 'employee' && p.emp_id) ||
+          (p.mode === 'other' && p.category && (p.name || '').trim())
+        )
+      );
+      if (isIncomplete) incompleteFoodEntries.push(idx + 1);
+    });
+    if (incompleteFoodEntries.length > 0) {
+      const msg = `Food Entry ${incompleteFoodEntries.join(', ')}: Sharing is more than 1, so everyone it's shared with must be specified before submitting.`;
+      setFormError(msg);
+      toastError(msg);
+      goToStep(3); // jump to Food section
+      return;
+    }
+    // ───────────────────────────────────────────────────────────────────────────
+
     // ── Receipt validation ──────────────────────────────────────────────────
     // If a section has data, at least one receipt must be uploaded for it.
     const receiptsByCategory = (cat) => receipts.filter(r => r.category === cat);
@@ -229,7 +255,7 @@ export default function ExpenseFormPage() {
     } catch { /* silent */ }
   };
 
-  const readOnly = !['draft','coordinator_rejected','hr_rejected','accounts_rejected'].includes(status)
+  const readOnly = !['draft','coordinator_rejected','hr_rejected','accounts_rejected','admin_rejected'].includes(status)
                    && user.role !== 'admin';
 
   const sectionComponents = [
@@ -286,7 +312,7 @@ export default function ExpenseFormPage() {
               {saving ? '⏳ Saving...' : 'Save Draft'}
             </button>
           )}
-          {expenseId && ['draft','coordinator_rejected','hr_rejected','accounts_rejected'].includes(status) && (
+          {expenseId && ['draft','coordinator_rejected','hr_rejected','accounts_rejected','admin_rejected'].includes(status) && (
             <button className="btn btn-amber" onClick={handleSubmit} disabled={submitting}>
               {submitting ? '⏳ Submitting...' : 'Submit for Approval'}
             </button>
@@ -331,7 +357,7 @@ export default function ExpenseFormPage() {
           {step < STEPS.length - 1 ? (
             <button className="btn btn-amber" onClick={() => goToStep(step + 1)}>Next →</button>
           ) : (
-            expenseId && ['draft','coordinator_rejected','hr_rejected','accounts_rejected'].includes(status) && (
+            expenseId && ['draft','coordinator_rejected','hr_rejected','accounts_rejected','admin_rejected'].includes(status) && (
               <button className="btn btn-success" onClick={handleSubmit} disabled={submitting}>
                 {submitting ? '⏳ Submitting...' : 'Submit for Approval'}
               </button>

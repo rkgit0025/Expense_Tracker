@@ -69,6 +69,7 @@ const STATUS_COLOR = {
   coordinator_rejected: '#ef4444',
   hr_rejected:          '#ef4444',
   accounts_rejected:    '#ef4444',
+  admin_rejected:       '#ef4444',
   draft:                '#94a3b8',
 };
 

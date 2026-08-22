@@ -19,6 +19,10 @@ import React, { useEffect, useRef, useState } from 'react';
  *  - searchPlaceholder: placeholder for the inner search input
  *  - emptyOptionLabel: label for the pinned "clear selection" row
  *  - disabled
+ *  - invalid: shows an amber border, for flagging an incomplete required
+ *    field (e.g. after a failed submit-validation check) without blocking
+ *    interaction — purely visual, defaults to false so every existing
+ *    caller is unaffected.
  */
 export default function SearchableSelect({
   options = [],
@@ -28,6 +32,7 @@ export default function SearchableSelect({
   searchPlaceholder = 'Type to search...',
   emptyOptionLabel = '— Select —',
   disabled = false,
+  invalid = false,
 }) {
   const [open, setOpen]         = useState(false);
   const [query, setQuery]       = useState('');
@@ -106,6 +111,7 @@ export default function SearchableSelect({
           background:    disabled ? 'var(--gray-50)' : 'var(--white)',
           color:         selected ? 'var(--gray-900)' : 'var(--gray-400)',
           userSelect:    'none',
+          borderColor:   invalid ? 'var(--amber)' : undefined,
         }}
       >
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>

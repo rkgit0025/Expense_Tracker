@@ -3,7 +3,7 @@ import { useParams, useNavigate, useLocation, Link } from 'react-router-dom';
 import api from '../api/axios';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/UIContext';
-import { formatINR, formatDate, statusLabel, canApprove, nextStageLabel } from '../utils/helpers';
+import { formatINR, formatDate, statusLabel, canApprove, canReject, nextStageLabel } from '../utils/helpers';
 import Section7_Receipts from '../components/ExpenseForm/Section7_Receipts';
 import TotalSummary from '../components/ExpenseForm/TotalSummary';
 
@@ -73,9 +73,13 @@ export default function ExpenseViewPage() {
 
   const { form, journey, returns, stay, travel, food, hotel, misc, receipts, history } = data;
 
-  // canAct: correct role for status AND not your own expense (you can never approve your own)
+  // canApproveNow / canRejectNow: correct role for status AND not your own
+  // expense (you can never action your own). Separate because admin is now
+  // allowed to reject at any live stage but still can't approve — for every
+  // other role these two are always identical.
   const isOwnExpense = form.emp_id === user.emp_id;
-  const canAct = canApprove(form.status, user.role) && !isOwnExpense;
+  const canApproveNow = canApprove(form.status, user.role) && !isOwnExpense;
+  const canRejectNow  = canReject(form.status, user.role)  && !isOwnExpense;
 
   // Duplicate-date warning — reviewer roles only. Covers DA/Site Allowance,
   // Travel, Food, Hotel, and Misc; the backend only attaches `dateConflicts`
@@ -111,7 +115,7 @@ export default function ExpenseViewPage() {
         </div>
         <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
           <button className="btn btn-ghost" onClick={() => navigate('/expenses', backListState ? { state: { listState: backListState } } : undefined)}>← Back</button>
-          {['draft','coordinator_rejected','hr_rejected','accounts_rejected'].includes(form.status) &&
+          {['draft','coordinator_rejected','hr_rejected','accounts_rejected','admin_rejected'].includes(form.status) &&
            (form.emp_id === user.emp_id || user.role === 'admin') && (
             <Link to={`/expenses/${id}/edit`} state={backListState ? { listState: backListState } : undefined} className="btn btn-primary">✏️ Edit</Link>
           )}
@@ -167,7 +171,7 @@ export default function ExpenseViewPage() {
       )}
 
       {/* Approval action bar — only shown to non-owners with the correct role */}
-      {canAct && (
+      {(canApproveNow || canRejectNow) && (
         <div className="card" style={{ background: 'var(--warning-bg)', border: '1.5px solid var(--amber)' }}>
           <div style={{ fontWeight: 600, color: 'var(--navy)', marginBottom: '4px', fontSize: '15px' }}>
             ⚡ Action Required
@@ -176,12 +180,13 @@ export default function ExpenseViewPage() {
             {user.role === 'coordinator' && 'As coordinator, verify all expense details are correct before approving.'}
             {user.role === 'hr'          && 'Review this coordinator-approved expense before forwarding to Accounts.'}
             {user.role === 'accounts'    && 'Final review. Approving marks this expense as fully settled.'}
+            {user.role === 'admin'       && 'As admin, you can reject this expense if something is wrong — approval must still go through the normal reviewer chain.'}
           </div>
           <div className="form-group">
             <label className="form-label">
               Your Review Comment <span className="required">*</span>
               <span style={{ fontWeight: 400, textTransform: 'none', fontSize: '11px', color: 'var(--gray-400)', marginLeft: 6 }}>
-                (required for both approve and reject)
+                ({canApproveNow && canRejectNow ? 'required for both approve and reject' : 'required to reject'})
               </span>
             </label>
             <textarea
@@ -194,12 +199,16 @@ export default function ExpenseViewPage() {
             />
           </div>
           <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-            <button className="btn btn-success" disabled={acting || !comment.trim()} onClick={() => handleAction('approve')}>
-              {acting ? '⏳ Processing...' : '✅ Approve Expense'}
-            </button>
-            <button className="btn btn-danger" disabled={acting || !comment.trim()} onClick={() => handleAction('reject')}>
-              {acting ? '⏳ Processing...' : '❌ Reject & Return to Employee'}
-            </button>
+            {canApproveNow && (
+              <button className="btn btn-success" disabled={acting || !comment.trim()} onClick={() => handleAction('approve')}>
+                {acting ? '⏳ Processing...' : '✅ Approve Expense'}
+              </button>
+            )}
+            {canRejectNow && (
+              <button className="btn btn-danger" disabled={acting || !comment.trim()} onClick={() => handleAction('reject')}>
+                {acting ? '⏳ Processing...' : '❌ Reject & Return to Employee'}
+              </button>
+            )}
           </div>
           {!comment.trim() && (
             <div style={{ fontSize: '12px', color: 'var(--warning)', marginTop: '10px', fontWeight: 500 }}>
@@ -229,7 +238,7 @@ export default function ExpenseViewPage() {
       )}
       {user.role === 'admin' && (
         <div className="alert alert-warning">
-          ℹ️ You are viewing as <strong>Admin</strong>. Admins can view all expenses but cannot approve or reject.
+          ℹ️ You are viewing as <strong>Admin</strong>. Admins can view all expenses and can reject one at any stage — including an already fully approved one — but cannot approve.
         </div>
       )}
 
@@ -261,7 +270,7 @@ export default function ExpenseViewPage() {
           ℹ️ This claim is marked as <strong>Single-Day Travel</strong> — Return Journey DA does not apply.
         </div>
       )}
-      {([['DA for Travel Days', journey], ['Return Journey', returns], ['DA for Stay Days / Site Allowance', stay]]).map(([title, rows]) =>
+      {([['DA for Travel Days', journey, true], ['Return Journey', returns, true], ['DA for Stay Days / Site Allowance', stay, false]]).map(([title, rows, showLocations]) =>
         rows?.length > 0 && (
           <div className="card" key={title}>
             <div className="card-header">
@@ -270,14 +279,19 @@ export default function ExpenseViewPage() {
             </div>
             <div className="table-wrap">
               <table>
-                <thead><tr><th>From</th><th>To</th><th>From Location</th><th>To Location</th><th>Scope</th><th>Days</th><th>Rate/Day</th><th style={{ textAlign: 'right' }}>Total</th></tr></thead>
+                <thead>
+                  <tr>
+                    <th>From</th><th>To</th>
+                    {showLocations && <><th>From Location</th><th>To Location</th></>}
+                    <th>Scope</th><th>Days</th><th>Rate/Day</th><th style={{ textAlign: 'right' }}>Total</th>
+                  </tr>
+                </thead>
                 <tbody>
                   {rows.map((r, i) => (
                     <tr key={i}>
                       <td>{formatDate(r.from_date)}</td>
                       <td>{formatDate(r.to_date)}</td>
-                      <td>{r.from_location || '—'}</td>
-                      <td>{r.to_location || '—'}</td>
+                      {showLocations && <><td>{r.from_location || '—'}</td><td>{r.to_location || '—'}</td></>}
                       <td>{r.scope}</td>
                       <td>{r.no_of_days}</td>
                       <td>{formatINR(r.amount_per_day)}</td>
@@ -318,8 +332,26 @@ export default function ExpenseViewPage() {
           <div className="card-header"><div className="section-number">4</div><span className="card-title">Food Expenses</span></div>
           <div className="table-wrap">
             <table>
-              <thead><tr><th>From</th><th>To</th><th>Sharing</th><th>Location</th><th style={{ textAlign: 'right' }}>Amount</th></tr></thead>
-              <tbody>{food.map((r,i) => <tr key={i}><td>{formatDate(r.from_date)}</td><td>{formatDate(r.to_date)}</td><td>{r.sharing}</td><td>{r.location}</td><td style={{textAlign:'right'}} className="amount-text">{formatINR(r.amount)}</td></tr>)}</tbody>
+              <thead><tr><th>From</th><th>To</th><th>Sharing</th><th>Location</th><th>Shared With</th><th>Remarks</th><th style={{ textAlign: 'right' }}>Amount</th></tr></thead>
+              <tbody>{food.map((r,i) => (
+                <tr key={i}>
+                  <td>{formatDate(r.from_date)}</td>
+                  <td>{formatDate(r.to_date)}</td>
+                  <td>{r.sharing}</td>
+                  <td>{r.location}</td>
+                  <td>
+                    {r.sharing_with?.length > 0
+                      ? r.sharing_with.map((p, pi) => (
+                          <div key={pi} style={{ fontSize: '12px' }}>
+                            {p.mode === 'employee' ? `${p.emp_name} (${p.emp_code})` : `${p.category}: ${p.name}`}
+                          </div>
+                        ))
+                      : '—'}
+                  </td>
+                  <td>{r.remarks || '—'}</td>
+                  <td style={{textAlign:'right'}} className="amount-text">{formatINR(r.amount)}</td>
+                </tr>
+              ))}</tbody>
             </table>
           </div>
         </div>
@@ -360,12 +392,13 @@ export default function ExpenseViewPage() {
         sectionData={{ travel, food, hotel, misc }} />
 
       {/* Approval trail */}
-      {(form.coordinator_comment || form.hr_comment || form.accounts_comment) && (
+      {(form.coordinator_comment || form.hr_comment || form.accounts_comment || form.admin_comment) && (
         <div className="card">
           <div className="card-header"><span style={{ fontSize: '18px' }}>💬</span><span className="card-title">Review Comments</span></div>
           {form.coordinator_comment && <InfoRow label="Coordinator" value={form.coordinator_comment} />}
           {form.hr_comment          && <InfoRow label="HR"          value={form.hr_comment} />}
           {form.accounts_comment    && <InfoRow label="Accounts"    value={form.accounts_comment} />}
+          {form.admin_comment       && <InfoRow label="Admin"       value={form.admin_comment} />}
         </div>
       )}
 

@@ -3,7 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import api from '../api/axios';
 import { useAuth } from '../context/AuthContext';
 import { useToast, useDialog } from '../context/UIContext';
-import { formatINR, formatDate, statusLabel } from '../utils/helpers';
+import { formatINR, formatDate, statusLabel, canReject } from '../utils/helpers';
 import Pagination from '../components/Pagination';
 import DateConflictBadge from '../components/DateConflictBadge';
 
@@ -11,16 +11,9 @@ function StatusBadge({ status }) {
   return <span className={`badge badge-${status}`}>{statusLabel(status)}</span>;
 }
 
-function canActionStatus(status, role) {
-  if (role === 'coordinator') return status === 'pending';
-  if (role === 'hr')          return status === 'coordinator_approved';
-  if (role === 'accounts')    return status === 'hr_approved';
-  return false;
-}
-
 const ALL_STATUSES = [
   'draft','pending','coordinator_approved','coordinator_rejected',
-  'hr_approved','hr_rejected','accounts_approved','accounts_rejected'
+  'hr_approved','hr_rejected','accounts_approved','accounts_rejected','admin_rejected'
 ];
 
 export default function ExpenseListPage() {
@@ -118,7 +111,7 @@ export default function ExpenseListPage() {
     coordinator: 'Expenses from your department awaiting your review.',
     hr:          'Coordinator-approved expenses awaiting your review.',
     accounts:    'HR-approved expenses awaiting your final approval.',
-    admin:       'All expenses (view only — admin cannot approve or reject).',
+    admin:       'All expenses. You can reject one at any stage — including a fully approved one — but cannot approve.',
   };
 
   return (
@@ -257,13 +250,13 @@ export default function ExpenseListPage() {
                     <td>
                       <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
                         <Link to={`/expenses/${e.expense_id}`} state={{ listState }} className="btn btn-ghost btn-sm">View</Link>
-                        {activeTab==='mine' && ['draft','coordinator_rejected','hr_rejected','accounts_rejected'].includes(e.status) && (
+                        {activeTab==='mine' && ['draft','coordinator_rejected','hr_rejected','accounts_rejected','admin_rejected'].includes(e.status) && (
                           <Link to={`/expenses/${e.expense_id}/edit`} state={{ listState }} className="btn btn-primary btn-sm">Edit</Link>
                         )}
                         {activeTab==='mine' && e.status==='draft' && (
                           <button className="btn btn-danger btn-sm" onClick={() => handleDelete(e.expense_id)}>Delete</button>
                         )}
-                        {activeTab==='all' && canActionStatus(e.status, role) && (
+                        {activeTab==='all' && canReject(e.status, role) && (
                           <Link to={`/expenses/${e.expense_id}`} state={{ listState }} className="btn btn-amber btn-sm">Review</Link>
                         )}
                       </div>
