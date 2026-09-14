@@ -90,7 +90,7 @@ export default function Section4_FoodExpenses({ rows, onChange, readOnly }) {
               <label className="form-label">From Date</label>
               <input type="date" className="form-control"
                 value={row.from_date} disabled={readOnly}
-                max={today}
+                max={row.to_date && row.to_date < today ? row.to_date : today}
                 onChange={e => update(idx, 'from_date', e.target.value)} />
             </div>
             <div className="form-group" style={{ margin: 0 }}>

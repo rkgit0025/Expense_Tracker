@@ -139,7 +139,7 @@ function AllowanceSubSection({
               <input
                 type="date" className="form-control"
                 value={row.from_date} disabled={readOnly}
-                max={maxDate && maxDate < today ? maxDate : today}
+                max={[today, maxDate, row.to_date].filter(Boolean).reduce((a, b) => (a < b ? a : b))}
                 min={minDate || undefined}
                 onChange={e => onFieldChange(section, idx, 'from_date', e.target.value)}
               />

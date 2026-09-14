@@ -311,12 +311,19 @@ export default function ExpenseViewPage() {
           <div className="card-header"><div className="section-number">3</div><span className="card-title">Travel Entries</span></div>
           <div className="table-wrap">
             <table>
-              <thead><tr><th>From</th><th>To</th><th>From Location</th><th>To Location</th><th>Mode</th><th style={{ textAlign: 'right' }}>Amount</th></tr></thead>
+              <thead><tr><th>From</th><th>To</th><th>From Location</th><th>To Location</th><th>Mode</th><th>Remarks</th><th style={{ textAlign: 'right' }}>Amount</th></tr></thead>
               <tbody>
                 {travel.map((r, i) => (
                   <tr key={i}>
                     <td>{formatDate(r.from_date)}</td><td>{formatDate(r.to_date)}</td>
-                    <td>{r.from_location}</td><td>{r.to_location}</td><td>{r.mode_of_travel}</td>
+                    <td>{r.from_location}</td><td>{r.to_location}</td>
+                    <td>
+                      {r.mode_of_travel}
+                      {r.no_of_km != null && r.rate_per_km != null && (
+                        <div style={{ fontSize: '11px', color: 'var(--gray-400)' }}>{r.no_of_km} km @ {formatINR(r.rate_per_km)}/km</div>
+                      )}
+                    </td>
+                    <td>{r.remarks || '—'}</td>
                     <td style={{ textAlign: 'right' }} className="amount-text">{formatINR(r.amount)}</td>
                   </tr>
                 ))}
@@ -363,8 +370,26 @@ export default function ExpenseViewPage() {
           <div className="card-header"><div className="section-number">5</div><span className="card-title">Hotel Expenses</span></div>
           <div className="table-wrap">
             <table>
-              <thead><tr><th>Check-in</th><th>Check-out</th><th>Sharing</th><th>Location</th><th style={{ textAlign: 'right' }}>Amount</th></tr></thead>
-              <tbody>{hotel.map((r,i) => <tr key={i}><td>{formatDate(r.from_date)}</td><td>{formatDate(r.to_date)}</td><td>{r.sharing}</td><td>{r.location}</td><td style={{textAlign:'right'}} className="amount-text">{formatINR(r.amount)}</td></tr>)}</tbody>
+              <thead><tr><th>Check-in</th><th>Check-out</th><th>Sharing</th><th>Location</th><th>Sharing With</th><th>Remarks</th><th style={{ textAlign: 'right' }}>Amount</th></tr></thead>
+              <tbody>{hotel.map((r,i) => (
+                <tr key={i}>
+                  <td>{formatDate(r.from_date)}</td>
+                  <td>{formatDate(r.to_date)}</td>
+                  <td>{r.sharing}</td>
+                  <td>{r.location}</td>
+                  <td>
+                    {r.sharing_with?.length > 0
+                      ? r.sharing_with.map((p, pi) => (
+                          <div key={pi} style={{ fontSize: '12px' }}>
+                            {p.mode === 'employee' ? `${p.emp_name} (${p.emp_code})` : `${p.category}: ${p.name}`}
+                          </div>
+                        ))
+                      : '—'}
+                  </td>
+                  <td>{r.remarks || '—'}</td>
+                  <td style={{textAlign:'right'}} className="amount-text">{formatINR(r.amount)}</td>
+                </tr>
+              ))}</tbody>
             </table>
           </div>
         </div>

@@ -18,32 +18,41 @@ const upload  = require('../middleware/upload');
 // addition can't repeat the mistake of updating one and forgetting the
 // other, the way the PDF route was missed the first time this was built.
 // Safe on a database that hasn't been migrated yet (checks first).
-async function attachFoodSharing(dbConn, food) {
-  if (!food || !food.length) return;
+// Attach each row's "shared with" people, in place, as `row.sharing_with`.
+// Generic across any table that has this exact shape (Food, Hotel) — pulled
+// into one shared function specifically so a future addition can't repeat
+// the mistake of updating one call site and forgetting another, the way the
+// PDF route was missed the first time this was built for Food.
+// Safe on a database that hasn't been migrated yet (checks first).
+async function attachSharing(dbConn, rows, sharingTable, fkCol) {
+  if (!rows || !rows.length) return;
   const [sharingTables] = await dbConn.query(
-    `SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='food_expense_sharing'`
+    `SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=?`,
+    [sharingTable]
   );
   if (!sharingTables.length) {
-    food.forEach(f => { f.sharing_with = []; });
+    rows.forEach(r => { r.sharing_with = []; });
     return;
   }
-  const foodIds = food.map(f => f.id);
-  const ph = foodIds.map(() => '?').join(',');
+  const ids = rows.map(r => r.id);
+  const ph = ids.map(() => '?').join(',');
   const [sharingRows] = await dbConn.query(
-    `SELECT fes.*, e.full_name AS emp_name, e.emp_code
-       FROM food_expense_sharing fes
-       LEFT JOIN employees e ON e.emp_id = fes.emp_id
-      WHERE fes.food_expense_id IN (${ph})`,
-    foodIds
+    `SELECT s.*, e.full_name AS emp_name, e.emp_code
+       FROM ${sharingTable} s
+       LEFT JOIN employees e ON e.emp_id = s.emp_id
+      WHERE s.${fkCol} IN (${ph})`,
+    ids
   );
-  food.forEach(f => {
-    f.sharing_with = sharingRows
-      .filter(s => s.food_expense_id === f.id)
+  rows.forEach(r => {
+    r.sharing_with = sharingRows
+      .filter(s => s[fkCol] === r.id)
       .map(s => s.person_type === 'employee'
         ? { mode: 'employee', emp_id: s.emp_id, emp_name: s.emp_name, emp_code: s.emp_code }
         : { mode: 'other', category: s.category, name: s.name });
   });
 }
+const attachFoodSharing  = (dbConn, food)  => attachSharing(dbConn, food,  'food_expense_sharing',  'food_expense_id');
+const attachHotelSharing = (dbConn, hotel) => attachSharing(dbConn, hotel, 'hotel_expense_sharing', 'hotel_expense_id');
 
 // Do two [from,to] date ranges share at least one day? (inclusive on both ends)
 const datesOverlap = (aFrom, aTo, bFrom, bTo) => aFrom <= bTo && aTo >= bFrom;
@@ -374,6 +383,7 @@ router.get('/:id', auth, async (req, res) => {
     const [food]     = await db.query('SELECT * FROM food_expenses      WHERE expense_id=?', [expenseId]);
     await attachFoodSharing(db, food);
     const [hotel]    = await db.query('SELECT * FROM hotel_expenses     WHERE expense_id=?', [expenseId]);
+    await attachHotelSharing(db, hotel);
     const [misc]     = await db.query('SELECT * FROM misc_expenses      WHERE expense_id=?', [expenseId]);
     const [receipts] = await db.query('SELECT * FROM expense_receipts   WHERE expense_id=?', [expenseId]);
     const [history]  = await db.query(
@@ -1049,7 +1059,10 @@ async function insertAllowances(conn, expenseId, empId, table, rows) {
 }
 async function insertTravel(conn, expenseId, rows) {
   if (!rows?.length) return;
-  // Detect whether the new columns exist (added by migration)
+  // Detect whether the new columns exist (added by migration) — same
+  // defensive pattern used elsewhere in this file, kept as one dynamic
+  // column list instead of branching per combination so a new optional
+  // column (like is_per_day) doesn't need its own set of if/else copies.
   const [cols] = await conn.query(
     `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'travel_entries'`
@@ -1057,73 +1070,89 @@ async function insertTravel(conn, expenseId, rows) {
   const colNames = cols.map(c => c.COLUMN_NAME);
   const hasNoOfDays    = colNames.includes('no_of_days');
   const hasTotalAmount = colNames.includes('total_amount');
+  const hasRemarks     = colNames.includes('remarks');
+  const hasIsPerDay    = colNames.includes('is_per_day');
+  const hasNoOfKm      = colNames.includes('no_of_km');
+  const hasRatePerKm   = colNames.includes('rate_per_km');
 
-  if (hasNoOfDays && hasTotalAmount) {
-    // Migrated schema: store per-day rate, days count, and computed total separately
-    await conn.query(
-      'INSERT INTO travel_entries (expense_id,from_date,to_date,from_location,to_location,mode_of_travel,amount,no_of_days,total_amount) VALUES ?',
-      [rows.map(r => [
-        expenseId,
-        toDate(r.from_date), toDate(r.to_date), r.from_location, r.to_location, r.mode_of_travel,
-        parseFloat(r.amount) || 0,
-        parseInt(r.no_of_days) || 0,
-        parseFloat(r.total_amount) || parseFloat(r.amount) || 0,
-      ])]
-    );
-  } else {
-    // Original schema: store computed total in amount column so multi-day totals are correct
-    await conn.query(
-      'INSERT INTO travel_entries (expense_id,from_date,to_date,from_location,to_location,mode_of_travel,amount) VALUES ?',
-      [rows.map(r => [
-        expenseId,
-        toDate(r.from_date), toDate(r.to_date), r.from_location, r.to_location, r.mode_of_travel,
-        parseFloat(r.total_amount) || parseFloat(r.amount) || 0,
-      ])]
-    );
-  }
+  const columns = ['expense_id', 'from_date', 'to_date', 'from_location', 'to_location', 'mode_of_travel', 'amount'];
+  if (hasNoOfDays)    columns.push('no_of_days');
+  if (hasTotalAmount) columns.push('total_amount');
+  if (hasRemarks)     columns.push('remarks');
+  if (hasIsPerDay)    columns.push('is_per_day');
+  if (hasNoOfKm)      columns.push('no_of_km');
+  if (hasRatePerKm)   columns.push('rate_per_km');
+
+  const values = rows.map(r => {
+    const row = [
+      expenseId,
+      toDate(r.from_date), toDate(r.to_date), r.from_location, r.to_location, r.mode_of_travel,
+      // If a separate total_amount column exists, `amount` stays the raw
+      // per-entry rate the user typed. On the original schema there's
+      // nowhere else to put the computed total, so it goes here instead —
+      // same behaviour the app has always had on an un-migrated database.
+      hasTotalAmount ? (parseFloat(r.amount) || 0) : (parseFloat(r.total_amount) || parseFloat(r.amount) || 0),
+    ];
+    if (hasNoOfDays)    row.push(parseInt(r.no_of_days) || 0);
+    if (hasTotalAmount) row.push(parseFloat(r.total_amount) || parseFloat(r.amount) || 0);
+    if (hasRemarks)     row.push(r.remarks || null);
+    if (hasIsPerDay)    row.push(r.is_per_day === false ? 0 : 1);
+    if (hasNoOfKm)      row.push(r.no_of_km !== '' && r.no_of_km != null ? parseFloat(r.no_of_km) : null);
+    if (hasRatePerKm)   row.push(r.rate_per_km !== '' && r.rate_per_km != null ? parseFloat(r.rate_per_km) : null);
+    return row;
+  });
+
+  await conn.query(
+    `INSERT INTO travel_entries (${columns.join(',')}) VALUES ?`,
+    [values]
+  );
 }
-async function insertFood(conn, expenseId, rows) {
+// Insert Food/Hotel-style rows (from_date,to_date,sharing,location,amount,
+// optionally remarks) one at a time — not a bulk INSERT like the simpler
+// tables — so each row's own insertId is available to attach its "shared
+// with" people to via the given child table. Food and Hotel have an
+// identical shape for this, so one function serves both; adding this to a
+// third section later only means one more thin wrapper, not a second copy
+// of the whole thing to keep in sync.
+async function insertSharedExpenseRows(conn, table, sharingTable, sharingFkCol, expenseId, rows) {
   if (!rows?.length) return;
   // Detect whether the migration has been applied yet, so this still works
   // (just without remarks / shared-with people) on a database that hasn't
   // been migrated — same defensive pattern used elsewhere in this file.
   const [cols] = await conn.query(
-    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
-     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'food_expenses'`
+    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`,
+    [table]
   );
   const hasRemarks = cols.some(c => c.COLUMN_NAME === 'remarks');
   const [tables] = await conn.query(
-    `SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
-     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'food_expense_sharing'`
+    `SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`,
+    [sharingTable]
   );
   const hasSharingTable = tables.length > 0;
 
-  // Inserted one row at a time (not a bulk INSERT like the others) so we
-  // have each row's own insertId to attach its "shared with" people to —
-  // that's a one-to-many relationship, so it needs its own child table.
   for (const r of rows) {
-    let foodExpenseId;
+    let rowId;
     if (hasRemarks) {
       const [result] = await conn.query(
-        'INSERT INTO food_expenses (expense_id,from_date,to_date,sharing,location,amount,remarks) VALUES (?,?,?,?,?,?,?)',
+        `INSERT INTO ${table} (expense_id,from_date,to_date,sharing,location,amount,remarks) VALUES (?,?,?,?,?,?,?)`,
         [expenseId, toDate(r.from_date), toDate(r.to_date), r.sharing, r.location, r.amount, r.remarks || null]
       );
-      foodExpenseId = result.insertId;
+      rowId = result.insertId;
     } else {
       const [result] = await conn.query(
-        'INSERT INTO food_expenses (expense_id,from_date,to_date,sharing,location,amount) VALUES (?,?,?,?,?,?)',
+        `INSERT INTO ${table} (expense_id,from_date,to_date,sharing,location,amount) VALUES (?,?,?,?,?,?)`,
         [expenseId, toDate(r.from_date), toDate(r.to_date), r.sharing, r.location, r.amount]
       );
-      foodExpenseId = result.insertId;
+      rowId = result.insertId;
     }
 
     if (!hasSharingTable) continue;
     const sharingWith = (r.sharing_with || []).filter(p => p && (p.mode === 'employee' ? p.emp_id : p.mode === 'other' ? (p.name || '').trim() : false));
     if (sharingWith.length) {
       await conn.query(
-        'INSERT INTO food_expense_sharing (food_expense_id,person_type,emp_id,category,name) VALUES ?',
+        `INSERT INTO ${sharingTable} (${sharingFkCol},person_type,emp_id,category,name) VALUES ?`,
         [sharingWith.map(p => [
-          foodExpenseId,
+          rowId,
           p.mode === 'employee' ? 'employee' : 'other',
           p.mode === 'employee' ? p.emp_id : null,
           p.mode === 'other' ? (p.category || 'Other') : null,
@@ -1133,11 +1162,8 @@ async function insertFood(conn, expenseId, rows) {
     }
   }
 }
-async function insertHotel(conn, expenseId, rows) {
-  if (!rows?.length) return;
-  await conn.query('INSERT INTO hotel_expenses (expense_id,from_date,to_date,sharing,location,amount) VALUES ?',
-    [rows.map(r => [expenseId, toDate(r.from_date), toDate(r.to_date), r.sharing, r.location, r.amount])]);
-}
+const insertFood  = (conn, expenseId, rows) => insertSharedExpenseRows(conn, 'food_expenses',  'food_expense_sharing',  'food_expense_id',  expenseId, rows);
+const insertHotel = (conn, expenseId, rows) => insertSharedExpenseRows(conn, 'hotel_expenses', 'hotel_expense_sharing', 'hotel_expense_id', expenseId, rows);
 async function insertMisc(conn, expenseId, rows) {
   if (!rows?.length) return;
   await conn.query('INSERT INTO misc_expenses (expense_id,expense_date,reason,location,amount) VALUES ?',
@@ -1189,6 +1215,7 @@ router.get('/:id/pdf', auth, async (req, res) => {
     const [food]     = await db.query('SELECT * FROM food_expenses      WHERE expense_id=?', [expenseId]);
     await attachFoodSharing(db, food);
     const [hotel]    = await db.query('SELECT * FROM hotel_expenses     WHERE expense_id=?', [expenseId]);
+    await attachHotelSharing(db, hotel);
     const [misc]     = await db.query('SELECT * FROM misc_expenses      WHERE expense_id=?', [expenseId]);
 
     const INR = (v) => `Rs. ${parseFloat(v || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
@@ -1368,12 +1395,19 @@ router.get('/:id/pdf', auth, async (req, res) => {
     if (travel && travel.length) {
       section('Travel Entries', '3');
       const cols = [
-        { label: 'From Date', w: 68 }, { label: 'To Date', w: 68 },
-        { label: 'From', w: 90 }, { label: 'To', w: 90 },
-        { label: 'Mode', w: 80 }, { label: 'Amount', w: 79, align: 'right' }
+        { label: 'From Date', w: 55 }, { label: 'To Date', w: 55 },
+        { label: 'From', w: 80 }, { label: 'To', w: 80 },
+        { label: 'Mode', w: 80 }, { label: 'Remarks', w: 85 }, { label: 'Amount', w: 80, align: 'right' }
       ];
       tableHeader(cols);
-      travel.forEach((r, i) => tableRow(cols, [fmtDate(r.from_date), fmtDate(r.to_date), r.from_location, r.to_location, r.mode_of_travel, INR(r.amount)], i % 2 === 0));
+      travel.forEach((r, i) => {
+        // Fold the km/rate basis into the Mode text rather than adding more
+        // columns to an already-tight table — e.g. "Own Bike (120 km @ ₹10/km)".
+        const modeText = (r.no_of_km != null && r.rate_per_km != null)
+          ? `${r.mode_of_travel} (${r.no_of_km} km @ ${INR(r.rate_per_km)}/km)`
+          : r.mode_of_travel;
+        tableRow(cols, [fmtDate(r.from_date), fmtDate(r.to_date), r.from_location, r.to_location, modeText, r.remarks || '—', INR(r.amount)], i % 2 === 0);
+      });
       currentTableCols = null;
       y += 4;
     }
@@ -1402,11 +1436,17 @@ router.get('/:id/pdf', auth, async (req, res) => {
     if (hotel && hotel.length) {
       section('Hotel Expenses', '5');
       const cols = [
-        { label: 'Check-in', w: 80 }, { label: 'Check-out', w: 80 },
-        { label: 'Sharing', w: 60 }, { label: 'Location', w: 165 }, { label: 'Amount', w: 90, align: 'right' }
+        { label: 'Check-in', w: 50 }, { label: 'Check-out', w: 50 },
+        { label: 'Sharing', w: 42 }, { label: 'Location', w: 70 },
+        { label: 'Shared With', w: 108 }, { label: 'Remarks', w: 95 }, { label: 'Amount', w: 100, align: 'right' }
       ];
       tableHeader(cols);
-      hotel.forEach((r, i) => tableRow(cols, [fmtDate(r.from_date), fmtDate(r.to_date), r.sharing, r.location, INR(r.amount)], i % 2 === 0));
+      hotel.forEach((r, i) => {
+        const sharedWithText = (r.sharing_with || []).map(p =>
+          p.mode === 'employee' ? `${p.emp_name} (${p.emp_code})` : `${p.category}: ${p.name}`
+        ).join('\n') || '—';
+        tableRow(cols, [fmtDate(r.from_date), fmtDate(r.to_date), r.sharing, r.location, sharedWithText, r.remarks || '—', INR(r.amount)], i % 2 === 0);
+      });
       currentTableCols = null;
       y += 4;
     }

@@ -25,9 +25,9 @@ const normDates = (rows, fields) => (rows || []).map(r => {
 });
 
 const emptyDA    = () => ({ from_date: '', to_date: '', from_location: '', to_location: '', scope: 'DA-Metro', no_of_days: 0, amount_per_day: 0, total_amount: 0 });
-const emptyTravel= () => ({ from_date: '', to_date: '', from_location: '', to_location: '', mode_of_travel: 'Taxi', amount: '', no_of_days: 0, total_amount: 0 });
+const emptyTravel= () => ({ from_date: '', to_date: '', from_location: '', to_location: '', mode_of_travel: 'Taxi', amount: '', no_of_days: 0, total_amount: 0, remarks: '', is_per_day: true, no_of_km: '', rate_per_km: 0 });
 const emptyFood  = () => ({ from_date: '', to_date: '', sharing: 1, location: '', amount: '', remarks: '', sharing_with: [] });
-const emptyHotel = () => ({ from_date: '', to_date: '', sharing: 1, location: '', amount: '' });
+const emptyHotel = () => ({ from_date: '', to_date: '', sharing: 1, location: '', amount: '', remarks: '', sharing_with: [] });
 const emptyMisc  = () => ({ expense_date: '', reason: '', location: '', amount: '' });
 
 const STEPS = [
@@ -156,6 +156,78 @@ export default function ExpenseFormPage() {
   const handleSubmit = async () => {
     if (!expenseId) { setFormError('Please save the expense first.'); return; }
 
+    // ── Travel mandatory-fields validation ──────────────────────────────────
+    // From Date, To Date, From Location and To Location are required for any
+    // travel row that has data in it. Without this, a row missing from_date
+    // was silently dropped by buildPayload's filter (see travel: below) and
+    // submission would sail through with that entry just gone.
+    const incompleteTravelEntries = [];
+    travel.forEach((r, idx) => {
+      const hasAnyData = r.from_date || r.to_date || r.from_location || r.to_location || r.amount || r.remarks || r.is_per_day === false;
+      if (!hasAnyData) return; // untouched blank row — fine to skip
+      if (!r.from_date || !r.to_date || !r.from_location || !r.to_location) {
+        incompleteTravelEntries.push(idx + 1);
+      }
+    });
+    if (incompleteTravelEntries.length > 0) {
+      const msg = `Travel Entry ${incompleteTravelEntries.join(', ')}: From Date, To Date, From Location and To Location are all required.`;
+      setFormError(msg);
+      toastError(msg);
+      goToStep(2); // jump to Travel section
+      return;
+    }
+    // ───────────────────────────────────────────────────────────────────────────
+
+    // ── Own Bike / Own Car kilometers validation ────────────────────────────
+    // These modes compute the amount from km × rate instead of a typed
+    // amount, so a missing/zero km value would otherwise silently submit as
+    // a ₹0 entry with no explanation — same class of bug as the other
+    // "required but not enforced" fields fixed elsewhere in this file.
+    const isVehicleMode = (modeStr) => (modeStr || '').split('+').map(s => s.trim()).some(m => m === 'Own Bike' || m === 'Own Car');
+    const missingKmEntries = [];
+    travel.forEach((r, idx) => {
+      if (isVehicleMode(r.mode_of_travel) && !(parseFloat(r.no_of_km) > 0)) {
+        missingKmEntries.push(idx + 1);
+      }
+    });
+    if (missingKmEntries.length > 0) {
+      const msg = `Travel Entry ${missingKmEntries.join(', ')}: Number of Kilometers is required when Mode of Travel is Own Bike or Own Car.`;
+      setFormError(msg);
+      toastError(msg);
+      goToStep(2); // jump to Travel section
+      return;
+    }
+    // ───────────────────────────────────────────────────────────────────────────
+
+    // ── Date range validation ───────────────────────────────────────────────
+    // From Date later than To Date shouldn't be enterable at all (the date
+    // pickers now cap From Date at To Date once one is set), but this is a
+    // backstop in case a date was typed directly rather than picked, or
+    // arrived some other way. calcDays() already treats an inverted range as
+    // 0 days rather than corrupting the total, but that's silent — better to
+    // say clearly what's wrong than let a row quietly compute to ₹0.
+    const dateRangeSections = [
+      ['DA for Travel Days', journey, 1], ['Return Journey', returns, 1], ['DA for Stay Days', stay, 1],
+      ['Travel', travel, 2], ['Food', food, 3], ['Hotel', hotel, 4],
+    ];
+    let invalidRangeStep = null;
+    const invalidRangeLabels = [];
+    dateRangeSections.forEach(([label, rows, step]) => {
+      const hasInvalid = rows.some(r => r.from_date && r.to_date && r.from_date > r.to_date);
+      if (hasInvalid) {
+        invalidRangeLabels.push(label);
+        if (invalidRangeStep === null) invalidRangeStep = step;
+      }
+    });
+    if (invalidRangeLabels.length > 0) {
+      const msg = `${invalidRangeLabels.join(', ')}: From Date is after To Date. Please fix the date range before submitting.`;
+      setFormError(msg);
+      toastError(msg);
+      goToStep(invalidRangeStep);
+      return;
+    }
+    // ───────────────────────────────────────────────────────────────────────────
+
     // ── Zero-amount validation ────────────────────────────────────────────────
     // Block submission if the total claim amount is ₹0 (same calculation as
     // TotalSummary). Shown via the in-app alert banner + toast, never window.alert.
@@ -175,28 +247,44 @@ export default function ExpenseFormPage() {
     }
     // ───────────────────────────────────────────────────────────────────────────
 
-    // ── Shared-With validation ──────────────────────────────────────────────
+    // ── Shared-With validation (Food + Hotel) ───────────────────────────────
     // Sharing > 1 means the claimant plus (Sharing - 1) other people — every
     // one of those extra slots must be identified (a real employee, or
     // "Other" with both a category and a name) before this can be submitted.
-    const incompleteFoodEntries = [];
-    food.forEach((r, idx) => {
-      const needed = Math.max(0, (parseInt(r.sharing, 10) || 1) - 1);
-      if (needed === 0) return;
-      const sw = r.sharing_with || [];
-      const isIncomplete = Array.from({ length: needed }, (_, i) => sw[i]).some(p =>
-        !p || !(
-          (p.mode === 'employee' && p.emp_id) ||
-          (p.mode === 'other' && p.category && (p.name || '').trim())
-        )
-      );
-      if (isIncomplete) incompleteFoodEntries.push(idx + 1);
-    });
+    // Same rule, same shape of data, for both sections — checked with one
+    // helper instead of two copies of the same loop.
+    const findIncompleteSharing = (rows) => {
+      const incomplete = [];
+      rows.forEach((r, idx) => {
+        const needed = Math.max(0, (parseInt(r.sharing, 10) || 1) - 1);
+        if (needed === 0) return;
+        const sw = r.sharing_with || [];
+        const isIncomplete = Array.from({ length: needed }, (_, i) => sw[i]).some(p =>
+          !p || !(
+            (p.mode === 'employee' && p.emp_id) ||
+            (p.mode === 'other' && p.category && (p.name || '').trim())
+          )
+        );
+        if (isIncomplete) incomplete.push(idx + 1);
+      });
+      return incomplete;
+    };
+
+    const incompleteFoodEntries = findIncompleteSharing(food);
     if (incompleteFoodEntries.length > 0) {
       const msg = `Food Entry ${incompleteFoodEntries.join(', ')}: Sharing is more than 1, so everyone it's shared with must be specified before submitting.`;
       setFormError(msg);
       toastError(msg);
       goToStep(3); // jump to Food section
+      return;
+    }
+
+    const incompleteHotelEntries = findIncompleteSharing(hotel);
+    if (incompleteHotelEntries.length > 0) {
+      const msg = `Hotel Entry ${incompleteHotelEntries.join(', ')}: Room Sharing is more than 1, so everyone sharing the room must be specified before submitting.`;
+      setFormError(msg);
+      toastError(msg);
+      goToStep(4); // jump to Hotel section
       return;
     }
     // ───────────────────────────────────────────────────────────────────────────

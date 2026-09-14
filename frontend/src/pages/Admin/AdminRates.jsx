@@ -18,16 +18,37 @@ export default function AdminRates() {
   const [formError,    setFormErr] = useState('');
   const [saving,       setSaving]  = useState(false);
 
+  // Own Bike / Own Car: a single flat ₹/km rate each, same for everyone —
+  // a deliberately simpler, separate mechanism from the per-designation
+  // rates above (those are keyed by designation; these are not).
+  const [vehicleRates,     setVehicleRates]     = useState({ 'Own Bike': 0, 'Own Car': 0 });
+  const [vehicleRatesEdit, setVehicleRatesEdit] = useState({ 'Own Bike': '', 'Own Car': '' });
+  const [savingVehicle,    setSavingVehicle]    = useState('');
+
   const load = async () => {
     setLoading(true);
     try {
-      const [r, d] = await Promise.all([api.get('/allowances'), api.get('/admin/designations')]);
+      const [r, d, v] = await Promise.all([api.get('/allowances'), api.get('/admin/designations'), api.get('/allowances/vehicle-rates')]);
       setRates(r.data); setDesig(d.data);
+      setVehicleRates(v.data);
+      setVehicleRatesEdit({ 'Own Bike': String(v.data['Own Bike'] ?? 0), 'Own Car': String(v.data['Own Car'] ?? 0) });
     } catch { error('Failed to load rates.'); }
     setLoading(false);
   };
 
   useEffect(() => { load(); }, []);
+
+  const handleSaveVehicleRate = async (mode) => {
+    const rate = parseFloat(vehicleRatesEdit[mode]);
+    if (isNaN(rate) || rate < 0) { error('Enter a valid, non-negative rate.'); return; }
+    setSavingVehicle(mode);
+    try {
+      await api.post('/allowances/vehicle-rates', { mode, rate_per_km: rate });
+      success(`${mode} rate saved.`);
+      setVehicleRates(p => ({ ...p, [mode]: rate }));
+    } catch (err) { error(err.response?.data?.message || 'Save failed.'); }
+    finally { setSavingVehicle(''); }
+  };
 
   const handleSave = async () => {
     if (!form.designation_id || !form.scope || !form.amount) { setFormErr('All fields are required.'); return; }
@@ -74,6 +95,32 @@ export default function AdminRates() {
 
       <div className="alert alert-info">
         💡 Rates auto-populate in the DA section of expense forms based on the employee's designation.
+      </div>
+
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div className="card-header">
+          <span style={{ fontSize:18 }}>🚗</span>
+          <span className="card-title">Own Bike / Own Car — Rate per Kilometer</span>
+        </div>
+        <p style={{ fontSize:13, color:'var(--gray-400)', padding:'0 16px', marginTop:8 }}>
+          A single flat ₹/km rate for each — same for every employee, regardless of designation. Auto-fills into the Travel Entries form when Own Bike/Own Car is selected as the mode, but stays editable there too.
+        </p>
+        <div style={{ display:'flex', gap:16, flexWrap:'wrap', padding:'8px 16px 16px' }}>
+          {['Own Bike', 'Own Car'].map(mode => (
+            <div key={mode} style={{ display:'flex', alignItems:'flex-end', gap:8 }}>
+              <div className="form-group" style={{ margin:0 }}>
+                <label className="form-label">{mode} (₹/km)</label>
+                <input type="number" className="form-control" min="0" step="0.01" style={{ width:140 }}
+                  value={vehicleRatesEdit[mode]}
+                  onChange={e => setVehicleRatesEdit(p => ({ ...p, [mode]: e.target.value }))} />
+              </div>
+              <button className="btn btn-primary btn-sm" disabled={savingVehicle === mode}
+                onClick={() => handleSaveVehicleRate(mode)}>
+                {savingVehicle === mode ? '⏳' : 'Save'}
+              </button>
+            </div>
+          ))}
+        </div>
       </div>
 
       {noRate.length > 0 && (
