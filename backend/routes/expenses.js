@@ -572,9 +572,9 @@ router.post('/:id/submit', auth, async (req, res) => {
 
     if (skipCoordinator) {
       await db.query(
-        `UPDATE expense_form SET status='coordinator_approved', submitted_at=NOW(),
+        `UPDATE expense_form SET status='coordinator_approved', submitted_at=UTC_TIMESTAMP(),
          coordinator_comment='Submitted by coordinator/senior role — coordinator stage auto-skipped',
-         coordinator_reviewed_by=?, coordinator_reviewed_at=NOW()
+         coordinator_reviewed_by=?, coordinator_reviewed_at=UTC_TIMESTAMP()
          WHERE expense_id=?`,
         [req.user.emp_id, expenseId]
       );
@@ -618,7 +618,7 @@ router.post('/:id/submit', auth, async (req, res) => {
     }
 
     // Regular employee — routes to their department coordinator first
-    await db.query("UPDATE expense_form SET status='pending',submitted_at=NOW() WHERE expense_id=?", [expenseId]);
+    await db.query("UPDATE expense_form SET status='pending',submitted_at=UTC_TIMESTAMP() WHERE expense_id=?", [expenseId]);
     await logHistory(db, expenseId, req.user.emp_id, 'submitted', form.status, 'pending', 'Expense submitted for coordinator approval.');
 
     // ── Email all coordinators assigned to the submitter's department ─────────
@@ -690,13 +690,13 @@ router.post('/:id/approve', auth, async (req, res) => {
     if (role === 'coordinator' && form.status === 'pending') {
       await assertCoordinatorDept(req.user.emp_id, form.emp_id);
       newStatus    = 'coordinator_approved';
-      updateFields = `status='coordinator_approved',coordinator_comment=?,coordinator_reviewed_by=?,coordinator_reviewed_at=NOW()`;
+      updateFields = `status='coordinator_approved',coordinator_comment=?,coordinator_reviewed_by=?,coordinator_reviewed_at=UTC_TIMESTAMP()`;
     } else if (role === 'hr' && form.status === 'coordinator_approved') {
       newStatus    = 'hr_approved';
-      updateFields = `status='hr_approved',hr_comment=?,hr_reviewed_by=?,hr_reviewed_at=NOW()`;
+      updateFields = `status='hr_approved',hr_comment=?,hr_reviewed_by=?,hr_reviewed_at=UTC_TIMESTAMP()`;
     } else if (role === 'accounts' && form.status === 'hr_approved') {
       newStatus    = 'accounts_approved';
-      updateFields = `status='accounts_approved',accounts_comment=?,accounts_reviewed_by=?,accounts_reviewed_at=NOW()`;
+      updateFields = `status='accounts_approved',accounts_comment=?,accounts_reviewed_by=?,accounts_reviewed_at=UTC_TIMESTAMP()`;
     } else if (role === 'admin') {
       return res.status(403).json({ message: 'Administrators are not permitted to approve expenses. Please use the correct approval role.' });
     } else {
@@ -808,13 +808,13 @@ router.post('/:id/reject', auth, async (req, res) => {
     if (role === 'coordinator' && form.status === 'pending') {
       await assertCoordinatorDept(req.user.emp_id, form.emp_id);
       newStatus    = 'coordinator_rejected';
-      updateFields = `status='coordinator_rejected',coordinator_comment=?,coordinator_reviewed_by=?,coordinator_reviewed_at=NOW()`;
+      updateFields = `status='coordinator_rejected',coordinator_comment=?,coordinator_reviewed_by=?,coordinator_reviewed_at=UTC_TIMESTAMP()`;
     } else if (role === 'hr' && form.status === 'coordinator_approved') {
       newStatus    = 'hr_rejected';
-      updateFields = `status='hr_rejected',hr_comment=?,hr_reviewed_by=?,hr_reviewed_at=NOW()`;
+      updateFields = `status='hr_rejected',hr_comment=?,hr_reviewed_by=?,hr_reviewed_at=UTC_TIMESTAMP()`;
     } else if (role === 'accounts' && form.status === 'hr_approved') {
       newStatus    = 'accounts_rejected';
-      updateFields = `status='accounts_rejected',accounts_comment=?,accounts_reviewed_by=?,accounts_reviewed_at=NOW()`;
+      updateFields = `status='accounts_rejected',accounts_comment=?,accounts_reviewed_by=?,accounts_reviewed_at=UTC_TIMESTAMP()`;
     } else if (role === 'admin' && ['pending', 'coordinator_approved', 'hr_approved', 'accounts_approved'].includes(form.status)) {
       // Admin can reject at ANY stage still awaiting a decision, AND an
       // already fully accounts_approved expense — a genuine override that
@@ -824,7 +824,7 @@ router.post('/:id/reject', auth, async (req, res) => {
       // at, so it's clearly visible as an admin override, not confused with
       // an ordinary coordinator/HR/accounts rejection.
       newStatus    = 'admin_rejected';
-      updateFields = `status='admin_rejected',admin_comment=?,admin_reviewed_by=?,admin_reviewed_at=NOW()`;
+      updateFields = `status='admin_rejected',admin_comment=?,admin_reviewed_by=?,admin_reviewed_at=UTC_TIMESTAMP()`;
     } else if (role === 'admin') {
       return res.status(403).json({ message: 'This expense cannot be rejected — it is a draft or already rejected.' });
     } else {

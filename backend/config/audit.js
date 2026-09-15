@@ -22,10 +22,17 @@ async function logAudit(db, req, action, entityType, entityId, entityLabel, desc
       } catch { /* silent */ }
     }
 
+    // UTC_TIMESTAMP() (not NOW()) — NOW() reflects whatever timezone the
+    // MySQL server itself is configured with, which varies by host; the
+    // rest of the app (mysql2's `timezone: 'Z'` driver option, and the
+    // frontend's UTC→IST display conversion) assumes every stored
+    // timestamp is genuine UTC. Mixing NOW() in here previously caused
+    // login times to display several hours off — see backend/config/db.js
+    // for the matching session-level fix.
     await db.query(
       `INSERT INTO audit_logs
          (actor_emp_id, actor_name, actor_role, action, entity_type, entity_id, entity_label, description, ip_address, action_time)
-       VALUES (?,?,?,?,?,?,?,?,?, CONVERT_TZ(NOW(),'+00:00','+05:30'))`,
+       VALUES (?,?,?,?,?,?,?,?,?, UTC_TIMESTAMP())`,
       [
         actor?.emp_id  || null,
         actorName,

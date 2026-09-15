@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import api from '../../api/axios';
 import { formatINR, calcDays } from '../../utils/helpers';
 
-const MODES = ['Bike', 'Auto', 'Taxi', 'Bus', 'Train', 'Flight', 'Metro', 'Cab', 'Own Bike', 'Own Car','Other'];
+const MODES = ['Bike', 'Auto', 'Taxi', 'Bus', 'Train', 'Flight', 'Metro', 'Cab', 'Own Bike', 'Own Car', 'Own Vehicle', 'Other'];
 const VEHICLE_MODES = ['Own Bike', 'Own Car']; // mutually exclusive with each other; km × rate replaces Amount for these
 
 const today = new Date().toISOString().split('T')[0]; // block future dates

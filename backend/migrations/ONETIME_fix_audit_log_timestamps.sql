@@ -1,0 +1,43 @@
+-- ⚠️  ONE-TIME DATA CORRECTION — read this whole comment before running.
+-- This is NOT like the other files in this folder: it is NOT safe to run
+-- more than once. Running it twice will subtract another 11 hours from
+-- every row and make the data wrong again in the other direction.
+--
+-- What this fixes:
+--   backend/config/audit.js used to compute action_time as
+--   CONVERT_TZ(NOW(),'+00:00','+05:30') — which assumes NOW() returns UTC.
+--   On a MySQL server whose own configured time_zone is already IST
+--   (common for an India-hosted server), NOW() returns IST directly, so
+--   that formula added +5:30 on top of an already-correct IST value. Then,
+--   because the app's mysql2 driver is configured with `timezone: 'Z'`
+--   (treat every date as UTC) and the frontend converts UTC -> IST for
+--   display, ANOTHER +5:30 gets added when the value is shown — two +5:30
+--   shifts stacked into a net +11:00 hours. A real login at 11:17 AM ends
+--   up displayed as 10:17 PM. Confirmed by reproducing this exact chain
+--   end-to-end against a live database before writing this fix.
+--
+--   The code fix (backend/config/db.js + backend/config/audit.js) stops
+--   this from happening for anything logged from now on. This script
+--   corrects the audit_logs rows that were already written wrong by the
+--   old code, so historical entries read correctly too.
+--
+--   Nothing else needs correcting. submitted_at, coordinator_reviewed_at,
+--   hr_reviewed_at, accounts_reviewed_at, admin_reviewed_at, created_at,
+--   updated_at, action_at, and uploaded_at are all TIMESTAMP-type columns
+--   (action_time is DATETIME) — MySQL already stores TIMESTAMP columns as
+--   true UTC internally regardless of session timezone, so their stored
+--   bytes were correct all along; only how they were being *read* was
+--   wrong, and that's fixed by the code change alone. Verified this by
+--   reading an existing, untouched row before and after the code fix and
+--   confirming it displays correctly without touching the stored value.
+--   audit_logs.action_time is the one exception, because the old code
+--   used an explicit (wrong) CONVERT_TZ call that actually wrote a bad
+--   value into a DATETIME column, which MySQL does not auto-correct.
+--
+-- Before running: take a look at a few recent rows and sanity-check them
+-- against what you actually remember happening —
+--   SELECT id, action_time, action, actor_name FROM audit_logs ORDER BY action_time DESC LIMIT 20;
+-- — every timestamp should look ~11 hours later than when the action
+-- actually happened. After running, re-check the same rows.
+
+UPDATE audit_logs SET action_time = DATE_SUB(action_time, INTERVAL 11 HOUR);

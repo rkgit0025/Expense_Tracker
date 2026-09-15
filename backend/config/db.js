@@ -28,6 +28,23 @@ const pool = mysql.createPool({
 
 const promisePool = pool.promise();
 
+// The driver's `timezone: 'Z'` option (above) tells mysql2 to treat every
+// date it reads/writes as UTC — but that's a JS-side interpretation only.
+// It does NOT make the *server's own* NOW()/CURRENT_TIMESTAMP return UTC —
+// those depend entirely on the MySQL server's configured time_zone, which
+// on an India-hosted server is very often already IST. When that's the
+// case, a bare NOW() returns IST, mysql2 then mislabels that IST value as
+// UTC, and the frontend's UTC→IST display conversion runs a SECOND time on
+// top of it — e.g. an 11:17 AM login ends up displaying as 10:17 PM (two
+// +5:30 shifts stacked). Setting the session's own time_zone to UTC on
+// every connection makes NOW() reliably return true UTC regardless of the
+// server's own default, which is what the rest of the app already assumes.
+pool.on('connection', (connection) => {
+  connection.query("SET time_zone = '+00:00'", (err) => {
+    if (err) console.error('⚠️  Could not set session time_zone to UTC:', err.message);
+  });
+});
+
 // Test connection on startup
 pool.getConnection((err, conn) => {
   if (err) { console.error('❌  MySQL connection error:', err.message); return; }
